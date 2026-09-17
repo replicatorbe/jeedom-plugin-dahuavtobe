@@ -65,10 +65,14 @@
         "Aucune adresse n'est renseignée pour ce portier.": "No address is set for this door station.",
         "adresse renseignée": "address filled in",
         "rattaché à un objet": "attached to an object",
-        "liaison établie": "link established",
-        "Le portier ne répond pas, ou le démon n'est pas démarré.": "The door station is not answering, or the daemon is not running.",
         "Appel décroché": "Call answered",
-        "Appel refusé": "Call refused"
+        "Appel refusé": "Call refused",
+        "Le port des ordres a changé : redémarrez le démon pour qu'il soit pris en compte.": "The order port has changed: restart the daemon for it to take effect.",
+        "Démon en marche": "Daemon running",
+        "Sans démon, aucune sonnerie ne remonte : démarrez-le depuis la configuration du plugin.": "Without the daemon no ring comes through: start it from the plugin configuration.",
+        "événements reçus": "events coming through",
+        "Le démon est arrêté : le portier a beau répondre, personne ne l'écoute.": "The daemon is stopped: the door station answers, but nobody is listening.",
+        "Le portier ne répond pas. Vérifiez son adresse et ses identifiants.": "The door station is not answering. Check its address and credentials."
     },
     "plugins/dahuavtobe/core/ajax/dahuavtobe.ajax.php": {
         "401 - Accès non autorisé": "401 - Access denied",
@@ -106,7 +110,9 @@
         "Identifiant utilisateur": "User id",
         "Identifiant inscrit dans le journal d'accès du portier pour les ouvertures venant de Jeedom. Il permet de les distinguer d'un badge ou d'un code.": "The id written to the door station access log for unlocks coming from Jeedom. It lets you tell them apart from a card or a keypad code.",
         "Durée de la sonnerie (s)": "Doorbell duration (s)",
-        "Combien de temps la commande « Sonnerie » reste à 1. Le portier annonce l'appui, jamais sa fin : c'est le plugin qui rend la commande à zéro, sans quoi elle y resterait et aucun scénario ne se redéclencherait.": "How long the \"Doorbell\" command stays at 1. The door station announces the press, never its end: the plugin is what brings the command back to zero, otherwise it would stay there and no scenario would fire again."
+        "Combien de temps la commande « Sonnerie » reste à 1. Le portier annonce l'appui, jamais sa fin : c'est le plugin qui rend la commande à zéro, sans quoi elle y resterait et aucun scénario ne se redéclencherait.": "How long the \"Doorbell\" command stays at 1. The door station announces the press, never its end: the plugin is what brings the command back to zero, otherwise it would stay there and no scenario would fire again.",
+        "Photographier à l'ouverture": "Take a picture on unlock",
+        "Une ouverture par badge ou par code ne fait pas sonner le portier : sans cette photo, rien dans Jeedom ne dit qui vient d'entrer.": "A card or keypad unlock does not ring the door station: without this picture, nothing in Jeedom says who just came in."
     },
     "plugins/dahuavtobe/desktop/php/dahuavtobe.php": {
         "401 - Accès non autorisé": "401 - Access denied",

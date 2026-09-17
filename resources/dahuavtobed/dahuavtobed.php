@@ -933,11 +933,12 @@ class VtoDaemon {
             return false;
         }
         $config['reconnect_delay']  = isset($config['reconnect_delay']) ? (int) $config['reconnect_delay'] : 15;
-        $config['snapshot_on_ring'] = isset($config['snapshot_on_ring']) ? (int) $config['snapshot_on_ring'] : 1;
         $config['snapshot_keep']    = isset($config['snapshot_keep']) ? (int) $config['snapshot_keep'] : 50;
         $config['heartbeat']        = isset($config['heartbeat']) ? (int) $config['heartbeat'] : 10;
-        if (!isset($config['ring_codes']) || !is_array($config['ring_codes'])) {
-            $config['ring_codes'] = array();
+        /* Liste vide : aucune capture. Le réglage est traduit en liste côté
+         * Jeedom, le démon n'a pas à savoir pourquoi un code déclenche une photo. */
+        if (!isset($config['shot_codes']) || !is_array($config['shot_codes'])) {
+            $config['shot_codes'] = array();
         }
         /* Codes décrivant un état : le démon ne leur fabrique aucune fin. */
         if (!isset($config['hold_codes']) || !is_array($config['hold_codes'])) {
@@ -1101,6 +1102,7 @@ class VtoDaemon {
                     'transport'  => $client->label(),
                     'time'       => date('Y-m-d H:i:s'),
                 )));
+                $this->refreshDoorStatus($client);
                 return;
             }
 
@@ -1170,7 +1172,7 @@ class VtoDaemon {
 
     private function dispatchEvents($_client, $_events) {
         $batch = array();
-        $ring = false;
+        $shot = false;
 
         foreach ($_events as $event) {
             VtoLog::debug($_client->name() . ' ' . $event['code'] . ' ' . $event['action']
@@ -1193,21 +1195,21 @@ class VtoDaemon {
                 unset($this->pulseResets[$key]);
             }
 
-            if ($event['action'] != 'Stop' && $this->isRing($event)) {
-                $ring = true;
+            if ($event['action'] != 'Stop' && $this->isShot($event)) {
+                $shot = true;
             }
         }
 
         if (!empty($batch)) {
             $this->push($batch);
         }
-        if ($ring) {
+        if ($shot) {
             $this->maybeSnapshot($_client);
         }
     }
 
     /*
-     * Cet événement annonce-t-il un visiteur devant la porte ?
+     * Cet événement mérite-t-il une photo ?
      *
      * La question n'est pas seulement « quel code » : le même code sert à
      * annoncer le début de l'appel et sa fin, et seul un champ de la charge
@@ -1218,8 +1220,8 @@ class VtoDaemon {
      * mieux vaut pas de photo qu'une mauvaise, et l'onglet Diagnostic de Jeedom
      * montrera de toute façon l'événement tel qu'il est arrivé.
      */
-    private function isRing($_event) {
-        foreach ($this->config['ring_codes'] as $rule) {
+    private function isShot($_event) {
+        foreach ($this->config['shot_codes'] as $rule) {
             if (!is_array($rule) || !isset($rule['code']) || $rule['code'] !== $_event['code']) {
                 continue;
             }
@@ -1235,6 +1237,73 @@ class VtoDaemon {
         return false;
     }
 
+    /*
+     * Relève l'état réel de la gâche à la connexion.
+     *
+     * Le portier n'annonce que les CHANGEMENTS d'état : au démarrage du démon,
+     * personne ne sait où en est la porte, et la commande resterait à sa valeur
+     * d'usine — « fermée » — sans que rien ne l'ait vérifié. Sur une porte
+     * d'entrée, c'est le genre d'affirmation qu'il vaut mieux ne pas inventer.
+     *
+     * Dans un fils, comme les captures : la boucle ne doit jamais attendre une
+     * requête HTTP, les sessions du portier expireraient.
+     */
+    private function refreshDoorStatus($_client) {
+        $pid = pcntl_fork();
+        if ($pid == -1) {
+            VtoLog::error('fork impossible pour l\'état de la porte');
+            return;
+        }
+        if ($pid > 0) {
+            return;
+        }
+
+        // --- processus fils ---
+        $this->closeInheritedSockets();
+        $open = $this->fetchDoorStatus($_client->config);
+        if ($open !== null) {
+            $this->callback('', array('events' => array(array(
+                'station_id' => $_client->id(),
+                'type'       => 'door',
+                'open'       => $open,
+                'time'       => date('Y-m-d H:i:s'),
+            ))));
+        }
+        exit(0);
+    }
+
+    /* Rend true, false, ou null quand le portier n'a pas su répondre — et null
+     * n'est pas false : on préfère ne rien dire à dire « fermée » sans l'avoir vu. */
+    private function fetchDoorStatus($_stationConfig) {
+        $httpPort = isset($_stationConfig['http_port']) && (int) $_stationConfig['http_port'] > 0
+                  ? (int) $_stationConfig['http_port'] : 80;
+        $channel = isset($_stationConfig['channel']) ? (int) $_stationConfig['channel'] : 1;
+        $url = 'http://' . $_stationConfig['ip'] . ':' . $httpPort
+             . '/cgi-bin/accessControl.cgi?action=getDoorStatus&channel=' . $channel;
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, array(
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPAUTH       => CURLAUTH_DIGEST,
+            CURLOPT_USERPWD        => $_stationConfig['username'] . ':' . $_stationConfig['password'],
+            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_TIMEOUT        => 8,
+        ));
+        $body = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($body === false || $code != 200) {
+            VtoLog::warning('état de la porte illisible (HTTP ' . $code . ')');
+            return null;
+        }
+        if (preg_match('/status\s*=\s*(\w+)/i', $body, $m)) {
+            return (strtolower($m[1]) == 'open');
+        }
+        VtoLog::warning('réponse inattendue à l\'état de la porte : ' . substr(trim($body), 0, 60));
+        return null;
+    }
+
     /* ----------------------------------------------------------- captures */
 
     /*
@@ -1243,9 +1312,6 @@ class VtoDaemon {
      * de temps pour que le visiteur ait reculé d'un pas.
      */
     private function maybeSnapshot($_client) {
-        if (empty($this->config['snapshot_on_ring'])) {
-            return;
-        }
         $id = $_client->id();
         if (isset($this->lastSnapshot[$id]) && time() - $this->lastSnapshot[$id] < self::SNAPSHOT_MIN_INTERVAL) {
             VtoLog::debug($_client->name() . ' capture ignorée (trop rapprochée)');

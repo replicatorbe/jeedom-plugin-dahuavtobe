@@ -60,6 +60,10 @@ last access, door left open — exist and are kept up to date, they are simply
 hidden so the dashboard stays readable. One tick box in the Commands tab shows
 any of them.
 
+A picture is also taken on every door unlock, card and keypad included: those
+do not ring the door station, and without it nothing would say who just came in.
+The setting can be turned off in the plugin configuration.
+
 If a snapshot fails, the **Snapshot** command keeps the picture from the previous
 visit, for want of anything better, and the plugin writes it to the log: that is
 the only way to know a displayed face is not the visitor waiting outside.

@@ -15,3 +15,7 @@ First release.
   taken.
 - The RTSP address command is gone: it would only have been usable with the
   device password written into it.
+- Plugin settings take effect without restarting the daemon.
+- The Health page tells a stopped daemon apart from an unreachable door station.
+- The door state is read from the device at startup instead of being assumed closed.
+- A picture is taken on door unlock, not only on ring.

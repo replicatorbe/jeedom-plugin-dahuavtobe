@@ -102,6 +102,16 @@ foreach ($payload['events'] as $event) {
             continue;
         }
 
+        /*
+         * Relevé de l'état de la gâche, demandé par le démon à la connexion.
+         * Le portier n'annonce que les changements : sans ce relevé, la commande
+         * resterait sur sa valeur d'usine sans que rien ne l'ait vérifié.
+         */
+        if ($type == 'door') {
+            $station->checkAndUpdateCmd('porte', !empty($event['open']) ? 1 : 0);
+            continue;
+        }
+
         if ($type == 'snapshot') {
             /*
              * Une capture ratée ne met rien à jour : la commande Image garde la

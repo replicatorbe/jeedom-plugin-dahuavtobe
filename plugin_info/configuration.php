@@ -56,6 +56,15 @@ if (!isConnect('admin')) {
 			</div>
 		</div>
 		<div class="form-group">
+			<label class="col-lg-4 control-label">{{Photographier à l'ouverture}}</label>
+			<div class="col-lg-2">
+				<input type="checkbox" class="configKey" data-l1key="snapshot_on_unlock" />
+			</div>
+			<div class="col-lg-6">
+				<span class="help-block">{{Une ouverture par badge ou par code ne fait pas sonner le portier : sans cette photo, rien dans Jeedom ne dit qui vient d'entrer.}}</span>
+			</div>
+		</div>
+		<div class="form-group">
 			<label class="col-lg-4 control-label">{{Images conservées}}</label>
 			<div class="col-lg-2">
 				<input class="configKey form-control" data-l1key="snapshot_keep" />

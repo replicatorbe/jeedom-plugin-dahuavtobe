@@ -17,3 +17,8 @@ Première version.
   la prise de vue.
 - La commande d'adresse RTSP est retirée : elle n'aurait été utilisable qu'en y
   inscrivant le mot de passe du portier.
+- Les réglages du plugin sont pris en compte sans redémarrer le démon.
+- La page Santé distingue le démon arrêté d'un portier injoignable.
+- L'état de la porte est relevé sur le portier au démarrage, au lieu d'être
+  supposé fermé.
+- Une photo est prise à l'ouverture de la porte, pas seulement à la sonnerie.

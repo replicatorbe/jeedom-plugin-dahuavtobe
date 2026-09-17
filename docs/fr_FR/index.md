@@ -83,6 +83,11 @@ Pour joindre la photo du visiteur à une notification, utilisez la commande
 s'affiche donc dans l'interface, mais un service extérieur (Telegram, un
 courriel) ne pourra pas la charger seul.
 
+Une photo est également prise à chaque ouverture de la porte, badge ou code
+compris : ces ouvertures-là ne font pas sonner le portier, et sans elle rien ne
+dirait qui vient d'entrer. Le réglage se désactive dans la configuration du
+plugin.
+
 Si la capture échoue — portier occupé, réseau lent — la commande **Image** garde
 la photo de la visite précédente, faute de mieux. Le plugin l'écrit alors au
 journal : c'est la seule façon de savoir qu'un visage affiché n'est pas celui du

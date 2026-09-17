@@ -111,8 +111,8 @@ class dahuavtobe extends eqLogic {
     );
 
     /*
-     * Ce qui déclenche une capture chez le démon. Transmis dans sa
-     * configuration plutôt que codé chez lui : c'est une question de modèle, pas
+     * Ce qui déclenche une capture chez le démon. Transmis dans sa configuration
+     * plutôt que codé chez lui : c'est une question de modèle et de réglage, pas
      * de plomberie, et cela a sa place ici, à côté de la table des événements.
      *
      * BackKeyLight porte une condition, et elle est indispensable : ce code
@@ -120,13 +120,24 @@ class dahuavtobe extends eqLogic {
      * 0). Sans la condition, le portier photographiait une deuxième fois
      * quelques secondes après le départ du visiteur, et la commande Image
      * finissait par montrer un seuil vide à la place du visage attendu.
+     *
+     * Les deux réglages sont traduits en liste ici plutôt que transmis tels
+     * quels : le démon n'a pas à savoir pourquoi un code déclenche une photo,
+     * seulement lesquels le font.
      */
-    public static function ringCodes() {
-        return array(
-            array('code' => 'BackKeyLight', 'field' => 'State', 'values' => array(1, 2)),
-            array('code' => 'Invite'),
-            array('code' => 'CallNoAnswered'),
-        );
+    public static function shotCodes() {
+        $codes = array();
+        if ((int) config::byKey('snapshot_on_ring', __CLASS__, 1) === 1) {
+            $codes[] = array('code' => 'BackKeyLight', 'field' => 'State', 'values' => array(1, 2));
+            $codes[] = array('code' => 'Invite');
+            $codes[] = array('code' => 'CallNoAnswered');
+        }
+        /* Une ouverture par badge ou par code ne sonne pas : sans cette capture,
+         * rien dans Jeedom ne dit qui vient d'entrer. */
+        if ((int) config::byKey('snapshot_on_unlock', __CLASS__, 1) === 1) {
+            $codes[] = array('code' => 'AccessControl');
+        }
+        return $codes;
     }
 
     /*
@@ -273,10 +284,9 @@ class dahuavtobe extends eqLogic {
             'stations'        => $stations,
             'heartbeat'       => (int) config::byKey('event_heartbeat', __CLASS__, 10),
             'reconnect_delay' => (int) config::byKey('reconnect_delay', __CLASS__, 15),
-            'snapshot_on_ring' => (int) config::byKey('snapshot_on_ring', __CLASS__, 1),
             'snapshot_keep'   => (int) config::byKey('snapshot_keep', __CLASS__, 50),
             'snapshot_dir'    => self::snapshotDir(),
-            'ring_codes'      => self::ringCodes(),
+            'shot_codes'      => self::shotCodes(),
             'hold_codes'      => self::holdCodes(),
             'pulse_duration'  => (int) config::byKey('pulse_duration', __CLASS__, 5),
         );
@@ -319,6 +329,33 @@ class dahuavtobe extends eqLogic {
         register_shutdown_function(function () {
             dahuavtobe::sendToDaemon(array('order' => 'reload'));
         });
+    }
+
+    /*
+     * Le coeur appelle <plugin>::postConfig_<clé>() après avoir enregistré un
+     * réglage (config.class.php, config::save). Sans ces méthodes, changer le
+     * battement du flux ou la durée de la sonnerie ne produisait rien : le démon
+     * gardait la configuration reçue à son démarrage. Le réglage paraissait pris
+     * en compte, et il ne l'était pas — c'est le pire des deux mondes.
+     */
+    public static function postConfig_event_heartbeat($_value)    { self::reloadDaemonConfig(); }
+    public static function postConfig_reconnect_delay($_value)    { self::reloadDaemonConfig(); }
+    public static function postConfig_pulse_duration($_value)     { self::reloadDaemonConfig(); }
+    public static function postConfig_snapshot_on_ring($_value)   { self::reloadDaemonConfig(); }
+    public static function postConfig_snapshot_on_unlock($_value) { self::reloadDaemonConfig(); }
+    public static function postConfig_snapshot_keep($_value)      { self::reloadDaemonConfig(); }
+
+    /*
+     * Le port des ordres, lui, ne se recharge pas : le démon l'a ouvert au
+     * démarrage et ne peut en changer sans être relancé. Le dire vaut mieux que
+     * de laisser croire au changement — ou que de relancer le démon dans la
+     * requête qui enregistre le réglage, ce qui figerait la page une demi-minute.
+     */
+    public static function postConfig_socketport($_value) {
+        if (self::deamon_info()['state'] == 'ok') {
+            message::add(__CLASS__, __('Le port des ordres a changé : redémarrez le démon pour qu\'il soit pris en compte.', __FILE__),
+                         null, 'socketportChanged');
+        }
     }
 
     /* ========================================================== REQUÊTES CGI */
@@ -462,6 +499,27 @@ class dahuavtobe extends eqLogic {
     }
 
     /* ========================================================== GÂCHE */
+
+    /*
+     * Interroge l'état réel de la gâche.
+     *
+     * Rend true (ouverte), false (fermée) ou null si le portier n'a pas su
+     * répondre — et null n'est pas false : une commande qui affiche « fermée »
+     * sans l'avoir vérifié est une affirmation, pas une mesure, et c'est
+     * exactement ce qu'on cherche à éviter sur une porte d'entrée.
+     */
+    public function doorStatus() {
+        $channel = (int) $this->getConfiguration('channel', 1);
+        $result = self::cgiRequest($this, 'accessControl.cgi?action=getDoorStatus&channel=' . $channel, false, 8);
+        if ($result === false) {
+            return null;
+        }
+        if (preg_match('/status\s*=\s*(\w+)/i', $result, $m)) {
+            return (strtolower($m[1]) == 'open');
+        }
+        return null;
+    }
+
 
     /*
      * Ouverture de la gâche. Deux verrous, parce qu'une commande Jeedom
@@ -909,6 +967,19 @@ class dahuavtobe extends eqLogic {
     public static function health() {
         $return = array();
 
+        /*
+         * L'état du démon en premier, et une seule fois : sans lui, aucun
+         * événement ne peut arriver, quel que soit l'état des portiers.
+         */
+        $daemon = self::deamon_info();
+        $daemonUp = ($daemon['state'] == 'ok');
+        $return[] = array(
+            'test'   => __('Démon en marche', __FILE__),
+            'result' => $daemonUp ? __('OK', __FILE__) : __('NOK', __FILE__),
+            'advice' => $daemonUp ? '' : __('Sans démon, aucune sonnerie ne remonte : démarrez-le depuis la configuration du plugin.', __FILE__),
+            'state'  => $daemonUp,
+        );
+
         foreach (self::byType(__CLASS__) as $eqLogic) {
             $name = $eqLogic->getHumanName(true);
 
@@ -930,16 +1001,25 @@ class dahuavtobe extends eqLogic {
                 'state'  => $hasObject,
             );
 
-            /* L'état qui compte vraiment : le flux d'événements passe-t-il ?
-             * Un portier joignable mais dont la liaison est tombée ne sonnera
-             * jamais dans Jeedom, et cela ne se voit nulle part ailleurs. */
+            /*
+             * L'état qui compte vraiment : les événements passent-ils ?
+             *
+             * La commande « En ligne » ne suffit pas à répondre. Démon arrêté,
+             * c'est le cron qui l'alimente, et il ne fait qu'une requête HTTP :
+             * un portier parfaitement joignable affichait donc « liaison
+             * établie » alors que personne n'écoutait. Le portier répond, mais
+             * rien ne remonte — les deux conditions sont nécessaires.
+             */
             $online = $eqLogic->getCmd(null, 'en_ligne');
-            $isOnline = is_object($online) && $online->execCmd() == 1;
+            $answers = is_object($online) && $online->execCmd() == 1;
+            $listening = $daemonUp && $answers;
             $return[] = array(
-                'test'   => $name . ' — ' . __('liaison établie', __FILE__),
-                'result' => $isOnline ? __('OK', __FILE__) : __('NOK', __FILE__),
-                'advice' => $isOnline ? '' : __('Le portier ne répond pas, ou le démon n\'est pas démarré.', __FILE__),
-                'state'  => $isOnline,
+                'test'   => $name . ' — ' . __('événements reçus', __FILE__),
+                'result' => $listening ? __('OK', __FILE__) : __('NOK', __FILE__),
+                'advice' => $listening ? ''
+                          : (!$daemonUp ? __('Le démon est arrêté : le portier a beau répondre, personne ne l\'écoute.', __FILE__)
+                                        : __('Le portier ne répond pas. Vérifiez son adresse et ses identifiants.', __FILE__)),
+                'state'  => $listening,
             );
         }
 
