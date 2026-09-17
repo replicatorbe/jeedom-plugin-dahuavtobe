@@ -16,6 +16,9 @@
  */
 
 require_once __DIR__ . '/../../../../core/php/core.inc.php';
+/* L'autochargeur de Jeedom ne sait résoudre que la classe portant le nom du
+ * plugin : les classes annexes doivent être incluses explicitement. */
+require_once __DIR__ . '/dahuavtobeCallLog.class.php';
 
 class dahuavtobe extends eqLogic {
 
@@ -667,6 +670,8 @@ class dahuavtobe extends eqLogic {
             array('isVisible' => 0, 'order' => $order++));
         $this->addCmdIfMissing('appel_manque', __('Appel manqué', __FILE__), 'info', 'binary',
             array('isVisible' => 0, 'isHistorized' => 1, 'order' => $order++));
+        $this->addCmdIfMissing('appels_manques_24h', __('Appels manqués (24 h)', __FILE__), 'info', 'numeric',
+            array('isHistorized' => 1, 'order' => $order++));
 
         $this->addCmdIfMissing('porte', __('Porte', __FILE__), 'info', 'binary',
             array('generic_type' => 'LOCK_STATE', 'isHistorized' => 1, 'order' => $order++));
@@ -917,6 +922,122 @@ class dahuavtobe extends eqLogic {
         return is_array($raw) ? array_reverse($raw) : array();
     }
 
+    /* ================================================ JOURNAL D'APPELS */
+
+    /*
+     * Relit le journal du portier et rattrape ce que le démon n'a pas vu.
+     *
+     * Le repère est l'horodatage du dernier appel traité, et non le numéro
+     * d'enregistrement : ces numéros sont contigus de 1 à N dans CHAQUE réponse,
+     * ce qui trahit un indice de position et non un identifiant. Le jour où le
+     * tampon circulaire déborde, ils se renumérotent — et un repère fondé sur
+     * eux ferait silencieusement rejouer ou manquer des sonneries. CreateTime,
+     * lui, est unique sur la totalité du journal.
+     */
+    public function backfillCalls($_force = false) {
+        $interval = (int) config::byKey('call_history_interval', __CLASS__, 15);
+        if ($interval <= 0 && !$_force) {
+            return null;                      // rattrapage désactivé
+        }
+        $lastRun = $this->getCache('backfill_run', 0);
+        if (!$_force && $lastRun > 0 && (time() - $lastRun) < $interval * 60) {
+            return null;
+        }
+        $this->setCache('backfill_run', time());
+
+        $raw = self::cgiRequest($this, 'recordFinder.cgi?action=find&name=' . dahuavtobeCallLog::LOG_NAME, false, 20);
+        if ($raw === false) {
+            log::add(__CLASS__, 'debug', $this->getHumanName() . ' '
+                   . __('journal d\'appels illisible', __FILE__));
+            return null;
+        }
+
+        $calls = array();
+        foreach (dahuavtobeCallLog::parse($raw) as $record) {
+            $call = dahuavtobeCallLog::normalize($record);
+            if ($call !== null) {
+                $calls[] = $call;
+            }
+        }
+        if (empty($calls)) {
+            return null;
+        }
+        usort($calls, function ($a, $b) { return $a['time'] - $b['time']; });
+
+        $now  = time();
+        $last = end($calls);
+        $mark = (int) $this->getConfiguration('last_call_time', 0);
+
+        /*
+         * Premier passage : on pose le repère sans rien signaler. Le journal
+         * porte des années d'appels, tous antérieurs à l'installation du
+         * plugin — les annoncer comme des sonneries manquées serait absurde.
+         */
+        if ($mark <= 0) {
+            $this->rememberCallMark($last['time']);
+            log::add(__CLASS__, 'info', $this->getHumanName() . ' '
+                   . __('journal d\'appels lu, repère posé au', __FILE__) . ' ' . date('Y-m-d H:i:s', $last['time']));
+            $this->publishCallCounters($calls, $now);
+            return 0;
+        }
+
+        $nouveaux = dahuavtobeCallLog::since($calls, $mark, $now);
+        $recovered = count($nouveaux);
+        foreach ($nouveaux as $call) {
+            log::add(__CLASS__, 'info', $this->getHumanName() . ' '
+                   . __('sonnerie rattrapée du', __FILE__) . ' ' . date('Y-m-d H:i:s', $call['time'])
+                   . ($call['missed'] ? ' (' . __('sans réponse', __FILE__) . ')' : ''));
+            /* Visible dans l'onglet Diagnostic, et marquée comme reconstituée :
+             * elle ne vient pas du flux d'événements. */
+            $this->pushRaw(array(
+                'time'      => date('Y-m-d H:i:s', $call['time']),
+                'code'      => 'CallLogRecovered',
+                'action'    => $call['missed'] ? 'Missed' : 'Answered',
+                'index'     => 0,
+                'synthetic' => true,
+                'data'      => array('peer' => $call['peer']),
+            ));
+        }
+
+        /*
+         * Le repère avance dès que le journal a été examiné, même si rien n'a
+         * été signalé. Tout ce qui le précède a été soit annoncé, soit écarté en
+         * connaissance de cause — le réexaminer à chaque passage ne changerait
+         * rien et laisserait le repère traîner indéfiniment derrière la réalité.
+         */
+        if ($last['time'] > $mark) {
+            $this->rememberCallMark($last['time']);
+        }
+
+        if ($recovered > 0) {
+            /*
+             * La date du dernier appel est corrigée, mais la commande Sonnerie
+             * n'est PAS actionnée : elle déclenche des scénarios, et rejouer à
+             * minuit la sonnerie de l'après-midi ferait s'allumer la maison pour
+             * un visiteur reparti depuis longtemps. Le rattrapage informe, il ne
+             * fait pas semblant que l'événement vient d'arriver.
+             */
+            $this->checkAndUpdateCmd('dernier_appel', date('Y-m-d H:i:s', $last['time']));
+            log::add(__CLASS__, 'info', $this->getHumanName() . ' '
+                   . $recovered . ' ' . __('sonnerie(s) rattrapée(s) dans le journal du portier', __FILE__));
+        }
+
+        $this->publishCallCounters($calls, $now);
+        return $recovered;
+    }
+
+    /* Le repère survit à un redémarrage : il va en configuration, pas en cache.
+     * Écriture directe, sinon postSave recréerait les commandes et rechargerait
+     * le démon à chaque passage du cron. */
+    private function rememberCallMark($_timestamp) {
+        $this->setConfiguration('last_call_time', (int) $_timestamp);
+        $this->save(true);
+    }
+
+    private function publishCallCounters($_calls, $_now) {
+        $this->checkAndUpdateCmd('appels_manques_24h', dahuavtobeCallLog::countMissed($_calls, $_now));
+    }
+
     /* ========================================================== CRON */
 
     /*
@@ -932,12 +1053,11 @@ class dahuavtobe extends eqLogic {
      * passent, et c'est la seule chose qui compte pour une sonnette.
      */
     public static function cron() {
+        $daemonUp = false;
         try {
-            if (self::deamon_info()['state'] == 'ok') {
-                return;
-            }
+            $daemonUp = (self::deamon_info()['state'] == 'ok');
         } catch (Throwable $e) {
-            /* Impossible de savoir : on sonde, une information vaut mieux qu'aucune. */
+            /* Impossible de savoir : on sondera, une information vaut mieux qu'aucune. */
             log::add(__CLASS__, 'debug', __('État du démon indéterminé :', __FILE__) . ' ' . $e->getMessage());
         }
 
@@ -946,8 +1066,21 @@ class dahuavtobe extends eqLogic {
                 if ($eqLogic->getConfiguration('ip') == '') {
                     continue;
                 }
-                $alive = self::cgiRequest($eqLogic, 'magicBox.cgi?action=getDeviceType', false, 5) !== false;
-                $eqLogic->checkAndUpdateCmd('en_ligne', $alive ? 1 : 0);
+                if (!$daemonUp) {
+                    $alive = self::cgiRequest($eqLogic, 'magicBox.cgi?action=getDeviceType', false, 5) !== false;
+                    $eqLogic->checkAndUpdateCmd('en_ligne', $alive ? 1 : 0);
+                    if (!$alive) {
+                        continue;             // inutile de réclamer son journal à un portier muet
+                    }
+                }
+                /*
+                 * Le rattrapage tourne dans les deux cas, et c'est voulu : il ne
+                 * sert pas qu'aux coupures. Si le flux d'événements de ce modèle
+                 * ne portait pas la sonnerie, le journal du portier resterait la
+                 * seule façon de savoir que quelqu'un a sonné. Il se limite tout
+                 * seul à son intervalle.
+                 */
+                $eqLogic->backfillCalls();
             } catch (Throwable $e) {
                 /* Un portier en échec ne doit pas priver les autres de leur tour. */
                 log::add(__CLASS__, 'error', $eqLogic->getHumanName() . ' : ' . $e->getMessage());

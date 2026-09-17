@@ -19,3 +19,6 @@ First release.
 - The Health page tells a stopped daemon apart from an unreachable door station.
 - The door state is read from the device at startup instead of being assumed closed.
 - A picture is taken on door unlock, not only on ring.
+- Missed ring recovery: the plugin re-reads the device call log and recovers
+  visits that happened while it was not listening.
+- New "Missed calls (24 h)" command.

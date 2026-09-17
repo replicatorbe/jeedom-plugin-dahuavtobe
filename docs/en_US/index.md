@@ -68,6 +68,29 @@ If a snapshot fails, the **Snapshot** command keeps the picture from the previou
 visit, for want of anything better, and the plugin writes it to the log: that is
 the only way to know a displayed face is not the visitor waiting outside.
 
+## What if Jeedom was not listening?
+
+The door station keeps its own call log. The plugin re-reads it every fifteen
+minutes by default — the interval is a setting, and 0 turns it off — to recover
+rings that happened during an update, a restart or a network outage. The
+**Missed calls (24 h)** command counts the unanswered rings of the last day;
+that is the one to look at when you get home.
+
+This recovery is a safety net, not a real-time path, and it is worth knowing
+why. The device only writes its record when the call **ends**, once the ringing
+has stopped, and the plugin only re-reads the log on its interval. A recovered
+call therefore shows up several minutes late. To react on the spot, use the
+**Doorbell** command.
+
+Recovery never triggers the Doorbell command, on purpose: that command is your
+scenario trigger, and lighting up the house at midnight for a visitor who left
+at four in the afternoon would help nobody. It also never goes back more than
+48 hours.
+
+On the very first run the plugin only sets a marker: the device log sometimes
+holds years of calls, all from before the plugin was installed, and announcing
+them as missed rings would make no sense.
+
 ## Opening the door from Jeedom
 
 The **Open door** command exists but is deliberately restrained: it is created

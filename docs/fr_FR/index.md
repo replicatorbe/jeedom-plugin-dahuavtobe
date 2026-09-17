@@ -93,6 +93,30 @@ la photo de la visite précédente, faute de mieux. Le plugin l'écrit alors au
 journal : c'est la seule façon de savoir qu'un visage affiché n'est pas celui du
 visiteur qui attend.
 
+## Et si Jeedom n'écoutait pas ?
+
+Le portier tient son propre journal d'appels. Le plugin le relit toutes les
+quinze minutes par défaut — c'est réglable, et 0 le désactive — pour retrouver
+les sonneries survenues pendant une mise à jour, un redémarrage ou une coupure
+réseau. La commande **Appels manqués (24 h)** compte les sonneries restées sans
+réponse sur la dernière journée ; c'est elle qu'on regarde en rentrant.
+
+Ce rattrapage est un filet, pas un chemin temps réel, et il vaut mieux savoir
+pourquoi. Le portier n'écrit son enregistrement qu'à la **fin** de l'appel,
+quand la sonnerie a cessé ; le plugin ne relit le journal qu'à son intervalle.
+Un appel rattrapé apparaît donc avec plusieurs minutes de retard. Pour réagir
+sur-le-champ, c'est la commande **Sonnerie** qu'il faut utiliser.
+
+Le rattrapage **ne déclenche jamais** la commande Sonnerie, volontairement :
+elle sert de déclencheur à vos scénarios, et faire sonner votre maison à minuit
+pour un visiteur reparti à 16 h n'aiderait personne. Il ne remonte pas non plus
+au-delà de 48 heures.
+
+Au tout premier passage, le plugin se contente de poser un repère : le journal
+du portier contient parfois des années d'appels, tous antérieurs à
+l'installation, et les annoncer comme des sonneries manquées n'aurait aucun
+sens.
+
 ## Ouvrir la porte depuis Jeedom
 
 La commande **Ouvrir la porte** existe, mais elle est délibérément bridée :

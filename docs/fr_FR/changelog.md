@@ -22,3 +22,6 @@ Première version.
 - L'état de la porte est relevé sur le portier au démarrage, au lieu d'être
   supposé fermé.
 - Une photo est prise à l'ouverture de la porte, pas seulement à la sonnerie.
+- Rattrapage des sonneries manquées : le plugin relit le journal d'appels du
+  portier et retrouve les visites survenues pendant qu'il n'écoutait pas.
+- Nouvelle commande « Appels manqués (24 h) ».

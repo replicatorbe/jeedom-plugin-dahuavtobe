@@ -22,6 +22,7 @@ illisibles. Une case à cocher suffit à en afficher une.
 | `en_ligne` | info / binaire | Liaison d'événements établie | oui |
 | `dernier_appel` | info / texte | Horodatage du dernier appel | non |
 | `appel_manque` | info / binaire | Appel terminé sans réponse | non |
+| `appels_manques_24h` | info / numérique | Sonneries sans réponse des dernières 24 h | oui |
 | `dernier_acces` | info / texte | Qui a ouvert, et par quel moyen | non |
 | `porte_non_fermee` | info / binaire | Porte restée ouverte | non |
 | `sabotage` | info / binaire | Alarme locale du portier | non |
@@ -29,6 +30,26 @@ illisibles. Une case à cocher suffit à en afficher une.
 | `capture` | action | Prendre une photo maintenant | oui |
 | `reconnecter` | action | Forcer une reconnexion | non |
 | `ouvrir` | action | Ouvrir la gâche — désactivée par défaut | non |
+
+## Le rattrapage des sonneries manquées
+
+Le portier tient lui-même le journal de ses appels. Le plugin le relit
+périodiquement et retrouve les sonneries survenues pendant qu'il n'écoutait
+pas : mise à jour, redémarrage de Jeedom, coupure réseau. C'est aussi le filet
+de sécurité si le flux d'événements d'un modèle ne portait jamais la sonnerie.
+
+Deux choses qu'il ne fait pas, et c'est délibéré. Il **n'actionne pas** la
+commande `sonnerie` : elle déclenche des scénarios, et rejouer à minuit la
+sonnerie de l'après-midi allumerait la maison pour un visiteur reparti depuis
+longtemps. Il **ne remonte pas plus de 48 heures** : au-delà, un appel n'est
+plus une nouvelle, c'est de l'archive — et le jour où le repère est perdu, cette
+garde évite d'annoncer d'un coup trois années de sonneries.
+
+Ce rattrapage n'est pas un chemin temps réel. Le portier n'écrit son
+enregistrement qu'à la **fin** de l'appel, et le plugin relit le journal à
+intervalle réglable : comptez ce délai plus la durée de sonnerie avant qu'un
+appel rattrapé n'apparaisse. Pour réagir dans la seconde, c'est la commande
+`sonnerie`, alimentée par le flux d'événements, qui fait foi.
 
 ## Deux précautions
 

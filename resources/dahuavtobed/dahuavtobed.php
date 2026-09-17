@@ -96,9 +96,17 @@ abstract class VtoTransport {
 
     const MAX_BUFFER = 4194304;      // 4 Mo : au-delà, le flux est corrompu
 
+    /*
+     * Certains portiers rejouent leurs événements « Start » encore actifs à
+     * chaque abonnement, une seconde après l'attache et horodatés bien avant
+     * que la connexion n'existe. Il faut donc savoir depuis quand on écoute.
+     */
+    const ATTACH_REPLAY_WINDOW = 3;
+
     public $config;
     public $socket = null;
     public $state = 'disconnected';
+    public $connectedAt = 0;
 
     protected $buffer = '';
     protected $lastActivity = 0;
@@ -129,7 +137,31 @@ abstract class VtoTransport {
         }
         $this->socket = null;
         $this->state = 'disconnected';
+        $this->connectedAt = 0;
         $this->buffer = '';
+    }
+
+    /*
+     * Cet événement est-il un rejeu de l'abonnement ?
+     *
+     * À l'attache, le portier annonce les événements « Start » encore en cours.
+     * L'intention est raisonnable — il met le nouvel auditeur au courant — mais
+     * le résultat ne l'est pas : un appel sans réponse vieux de deux minutes
+     * revient en Start à chaque reconnexion, et Jeedom le prend pour un visiteur
+     * qui vient d'appuyer. Toutes les reconnexions de la nuit rallumeraient la
+     * maison. Le cas est documenté sur VTO2000A, avec des événements rejoués une
+     * seconde après l'attache et horodatés avant même que la connexion existe.
+     *
+     * Seuls les « Start » sont concernés : une impulsion n'est pas un état, elle
+     * n'a rien à rejouer. Et la fenêtre est courte — trois secondes — car le
+     * risque symétrique existe : une vraie sonnerie pile à la reconnexion serait
+     * perdue. Entre manquer une sonnerie survenue dans ces trois secondes-là et
+     * en inventer une à chaque coupure réseau, le choix est vite fait.
+     */
+    public function isAttachReplay($_action) {
+        return ($_action == 'Start'
+             && $this->connectedAt > 0
+             && (time() - $this->connectedAt) <= self::ATTACH_REPLAY_WINDOW);
     }
 
     public function readyToRetry() {
@@ -383,6 +415,7 @@ class VtoDhipTransport extends VtoTransport {
 
         stream_set_blocking($this->socket, false);
         $this->state = 'connected';
+        $this->connectedAt = time();
         $this->lastKeepAliveSent = time();
         $this->lastActivity = time();
         $this->awaitingKeepAlive = false;
@@ -652,6 +685,7 @@ class VtoCgiTransport extends VtoTransport {
         stream_set_blocking($this->socket, false);
         $this->buffer = $_rest;
         $this->state = 'connected';
+        $this->connectedAt = time();
         $this->lastActivity = time();
         return array(true, '');
     }
@@ -1178,6 +1212,12 @@ class VtoDaemon {
             VtoLog::debug($_client->name() . ' ' . $event['code'] . ' ' . $event['action']
                         . ' index ' . $event['index']
                         . (empty($event['data']) ? '' : ' ' . json_encode($event['data'])));
+
+            if ($_client->isAttachReplay($event['action'])) {
+                VtoLog::info($_client->name() . ' ' . $event['code']
+                           . ' ignoré : rejeu de l\'abonnement, pas un nouvel événement');
+                continue;
+            }
             $batch[] = $event;
 
             $key = $event['station_id'] . '|' . $event['code'];

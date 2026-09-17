@@ -72,7 +72,13 @@
         "Sans démon, aucune sonnerie ne remonte : démarrez-le depuis la configuration du plugin.": "Without the daemon no ring comes through: start it from the plugin configuration.",
         "événements reçus": "events coming through",
         "Le démon est arrêté : le portier a beau répondre, personne ne l'écoute.": "The daemon is stopped: the door station answers, but nobody is listening.",
-        "Le portier ne répond pas. Vérifiez son adresse et ses identifiants.": "The door station is not answering. Check its address and credentials."
+        "Le portier ne répond pas. Vérifiez son adresse et ses identifiants.": "The door station is not answering. Check its address and credentials.",
+        "Appels manqués (24 h)": "Missed calls (24 h)",
+        "journal d'appels illisible": "call log unreadable",
+        "journal d'appels lu, repère posé au": "call log read, marker set at",
+        "sonnerie rattrapée du": "ring recovered from",
+        "sans réponse": "unanswered",
+        "sonnerie(s) rattrapée(s) dans le journal du portier": "ring(s) recovered from the device call log"
     },
     "plugins/dahuavtobe/core/ajax/dahuavtobe.ajax.php": {
         "401 - Accès non autorisé": "401 - Access denied",
@@ -112,7 +118,10 @@
         "Durée de la sonnerie (s)": "Doorbell duration (s)",
         "Combien de temps la commande « Sonnerie » reste à 1. Le portier annonce l'appui, jamais sa fin : c'est le plugin qui rend la commande à zéro, sans quoi elle y resterait et aucun scénario ne se redéclencherait.": "How long the \"Doorbell\" command stays at 1. The door station announces the press, never its end: the plugin is what brings the command back to zero, otherwise it would stay there and no scenario would fire again.",
         "Photographier à l'ouverture": "Take a picture on unlock",
-        "Une ouverture par badge ou par code ne fait pas sonner le portier : sans cette photo, rien dans Jeedom ne dit qui vient d'entrer.": "A card or keypad unlock does not ring the door station: without this picture, nothing in Jeedom says who just came in."
+        "Une ouverture par badge ou par code ne fait pas sonner le portier : sans cette photo, rien dans Jeedom ne dit qui vient d'entrer.": "A card or keypad unlock does not ring the door station: without this picture, nothing in Jeedom says who just came in.",
+        "Rattrapage des sonneries": "Ring recovery",
+        "Relire le journal toutes les": "Re-read the log every",
+        "Le portier tient le journal de ses appels. Le relire permet de retrouver les sonneries survenues pendant que Jeedom n'écoutait pas — mise à jour, redémarrage, coupure réseau — et sert de filet si le flux d'événements de votre modèle ne portait pas la sonnerie. 0 désactive le rattrapage.": "The door station keeps a log of its calls. Re-reading it recovers rings that happened while Jeedom was not listening — an update, a restart, a network outage — and acts as a safety net if your model's event stream never carried the ring. 0 turns recovery off."
     },
     "plugins/dahuavtobe/desktop/php/dahuavtobe.php": {
         "401 - Accès non autorisé": "401 - Access denied",

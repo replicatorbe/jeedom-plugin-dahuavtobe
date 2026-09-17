@@ -76,6 +76,22 @@ if (!isConnect('admin')) {
 	</fieldset>
 
 	<fieldset>
+		<legend><i class="fas fa-history"></i> {{Rattrapage des sonneries}}</legend>
+		<div class="form-group">
+			<label class="col-lg-4 control-label">{{Relire le journal toutes les}}</label>
+			<div class="col-lg-2">
+				<div class="input-group">
+					<input class="configKey form-control" data-l1key="call_history_interval" />
+					<span class="input-group-addon">min</span>
+				</div>
+			</div>
+			<div class="col-lg-6">
+				<span class="help-block">{{Le portier tient le journal de ses appels. Le relire permet de retrouver les sonneries survenues pendant que Jeedom n'écoutait pas — mise à jour, redémarrage, coupure réseau — et sert de filet si le flux d'événements de votre modèle ne portait pas la sonnerie. 0 désactive le rattrapage.}}</span>
+			</div>
+		</div>
+	</fieldset>
+
+	<fieldset>
 		<legend><i class="fas fa-unlock"></i> {{Ouverture de la porte}}</legend>
 		<div class="form-group">
 			<label class="col-lg-4 control-label">{{Autoriser l'ouverture}}</label>
