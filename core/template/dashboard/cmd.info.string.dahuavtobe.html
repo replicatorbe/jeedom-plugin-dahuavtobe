@@ -1,0 +1,117 @@
+<div class="cmd cmd-widget #history#" data-type="info" data-subtype="string" data-template="dahuavtobe" data-state="wait" data-cmd_id="#id#" data-cmd_uid="#uid#" data-version="#version#" data-eqLogic_id="#eqLogic_id#">
+  <div class="title #hide_name#">
+    <div class="cmdName">#name_display#</div>
+  </div>
+  <div class="content">
+    <div class="vtoMessage"></div>
+    <a class="vtoShot" target="_blank" rel="noopener">
+      <img class="vtoImg" alt="">
+      <span class="vtoStamp"></span>
+    </a>
+  </div>
+  <div class="timeCmd label label-default #history#" data-type="info"></div>
+  <script>
+    (function () {
+      /* Une seule feuille de style pour toutes les tuiles du plugin, posée au
+         premier rendu. Le CSS d'un plugin n'est pas chargé sur le dashboard, et
+         les règles .content du coeur n'existent pas côté mobile : le gabarit
+         doit se suffire à lui-même. Aucune couleur en dur, tout vient du thème. */
+      if (!document.getElementById('dahuavtobeWidgetCss')) {
+        var css = document.createElement('style')
+        css.id = 'dahuavtobeWidgetCss'
+        css.textContent = [
+          '.cmd-widget[data-template="dahuavtobe"]{display:flex;flex-direction:column;align-items:center;width:100%}',
+          '.cmd-widget[data-template="dahuavtobe"] .cmdName{font-size:12px;line-height:16px;font-weight:400;color:var(--txt-color)}',
+          '.cmd-widget[data-template="dahuavtobe"] .content{display:flex;flex-direction:column;align-items:stretch;width:100%;padding:0 6px 4px}',
+
+          /* L\'image occupe toute la tuile. object-fit plutôt qu\'une hauteur
+             fixe : une photo de portier est en 16/9, l\'écraser pour remplir un
+             carré déformerait le visage qu\'on cherche justement à reconnaître. */
+          '.cmd-widget[data-template="dahuavtobe"] .vtoShot{position:relative;display:block;width:100%;overflow:hidden;border-radius:var(--border-radius);line-height:0}',
+          '.cmd-widget[data-template="dahuavtobe"] .vtoImg{display:block;width:100%;height:auto;max-height:340px;object-fit:cover}',
+
+          /* L\'heure par-dessus le bas de l\'image, sur un voile sombre : une
+             photo de nuit et une photo de jour n\'offrent pas le même fond, et
+             un texte qui se lit sur l\'une disparaîtrait sur l\'autre. */
+          '.cmd-widget[data-template="dahuavtobe"] .vtoStamp{position:absolute;left:0;right:0;bottom:0;padding:3px 6px;font-size:.74em;line-height:1.4;text-align:right;color:#fff;background:linear-gradient(transparent, rgba(0,0,0,.62))}',
+
+          /* Ni image, ni erreur : la tuile le dit en toutes lettres. Une zone
+             vide se lirait comme une photo noire, donc comme un portier en
+             panne. */
+          '.cmd-widget[data-template="dahuavtobe"] .vtoMessage{display:none;padding:10px 4px;font-size:.82em;line-height:1.4;text-align:center;color:var(--txt-color);opacity:.6}',
+          '.cmd-widget[data-template="dahuavtobe"][data-state="wait"] .vtoMessage,',
+          '.cmd-widget[data-template="dahuavtobe"][data-state="error"] .vtoMessage{display:block}',
+          '.cmd-widget[data-template="dahuavtobe"][data-state="wait"] .vtoShot,',
+          '.cmd-widget[data-template="dahuavtobe"][data-state="error"] .vtoShot{display:none}',
+          '.cmd-widget[data-template="dahuavtobe"][data-state="error"] .vtoMessage{opacity:1;color:var(--al-danger-color)}'
+        ].join('')
+        document.head.appendChild(css)
+      }
+
+      /*
+       * L\'adresse est composée par le plugin et n\'a qu\'une forme possible.
+       * La vérifier ici coûte une ligne et ferme la porte à tout ce qui n\'est
+       * pas une image servie par le passe-plat — un « javascript: » glissé dans
+       * une valeur de commande, par exemple.
+       */
+      function dahuavtobeSafe(_url) {
+        return (typeof _url === 'string'
+             && /^plugins\/dahuavtobe\/core\/php\/snapshot\.php\?file=vto\d+_\d{8}-\d{6}_[0-9a-f]{8}\.jpg$/.test(_url))
+      }
+
+      /*
+       * L\'horodatage est lu dans le nom du fichier, que le plugin écrit en
+       * temps universel. Sans la conversion, une photo prise à 19 h s\'afficherait
+       * 17 h en été, et on croirait regarder une visite de l\'après-midi.
+       */
+      function dahuavtobeStamp(_url) {
+        var m = /_(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})_/.exec(_url)
+        if (m === null) { return '' }
+        var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]))
+        if (isNaN(d.getTime())) { return '' }
+        return d.toLocaleString()
+      }
+
+      jeedom.cmd.addUpdateFunction('#id#', function (_options) {
+        var cmd = document.querySelector('.cmd[data-cmd_uid="#uid#"]')
+        if (!is_object(cmd)) { return }
+
+        var link = cmd.querySelector('.vtoShot')
+        var img = cmd.querySelector('.vtoImg')
+        var stamp = cmd.querySelector('.vtoStamp')
+        var message = cmd.querySelector('.vtoMessage')
+        var url = _options.value
+
+        if (!dahuavtobeSafe(url)) {
+          cmd.setAttribute('data-state', 'wait')
+          message.textContent = '{{Aucune image pour le moment.}}'
+          img.removeAttribute('src')
+          return
+        }
+
+        /* L\'image peut avoir été effacée par la rotation alors que la commande
+           pointe encore dessus. Le dire vaut mieux qu\'une icône cassée, qu\'on
+           prendrait pour une panne du portier. */
+        img.onerror = function () {
+          cmd.setAttribute('data-state', 'error')
+          message.textContent = '{{Image introuvable — elle a probablement été effacée par la rotation.}}'
+        }
+        img.onload = function () {
+          cmd.setAttribute('data-state', 'ok')
+        }
+
+        link.setAttribute('href', url)
+        link.setAttribute('title', '{{Ouvrir l\'image en grand}}')
+        img.setAttribute('src', url)
+        stamp.textContent = dahuavtobeStamp(url)
+
+        jeedom.cmd.displayDuration(_options.valueDate, cmd.querySelector('.timeCmd'), '#time#')
+      })
+
+      /* display_value reste vide : le coeur n\'y échappe que les apostrophes,
+         ce qui ne protège pas d\'une balise de fermeture. La tuile lit #value#,
+         et la contrôle avant d\'en faire une adresse. */
+      jeedom.cmd.refreshValue([{ cmd_id: '#id#', value: '#value#', display_value: '', valueDate: '#valueDate#', collectDate: '#collectDate#', alertLevel: '#alertLevel#', unit: '#unite#' }])
+    })()
+  </script>
+</div>

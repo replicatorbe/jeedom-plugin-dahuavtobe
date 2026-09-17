@@ -1,0 +1,974 @@
+<?php
+/* This file is part of Jeedom.
+ *
+ * Jeedom is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Jeedom is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Jeedom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+require_once __DIR__ . '/../../../../core/php/core.inc.php';
+
+class dahuavtobe extends eqLogic {
+
+    /* Un seul rechargement du démon par requête HTTP, même si trois portiers sont enregistrés. */
+    private static $_reloadScheduled = false;
+
+    /* Le coeur a déjà mis l'id à null quand postRemove s'exécute. */
+    private $_removedId = 0;
+
+    /*
+     * Ce que le portier annonce quand il se passe quelque chose.
+     *
+     * BackKeyLight est la pièce maîtresse : c'est lui qui porte l'état de
+     * l'appel dans son champ State, et c'est le seul code dont on sache, sur ce
+     * modèle, qu'il marque le DÉBUT de la sonnerie. Les autres décrivent la
+     * suite — décroché, raccroché, abandon — ou concernent la porte.
+     *
+     * La table est volontairement large : un code de trop ne coûte qu'une ligne
+     * ignorée, un code manquant coûte une sonnerie perdue, et le catalogue varie
+     * d'un micrologiciel à l'autre. L'onglet Diagnostic montre ce qui arrive
+     * réellement ; ce qui n'est pas dans cette table y apparaît quand même.
+     *
+     * 'cmd'    : logicalId de la commande binaire mise à jour
+     * 'value'  : 'action' suit Start/Stop du flux ; 1 ou 0 force la valeur
+     * 'state'  : texte repris dans etat_appel au début de l'événement
+     * 'state_stop' : texte repris dans etat_appel à sa fin, et seulement si le
+     *            portier a réellement envoyé cette fin — jamais sur une fin
+     *            fabriquée par le démon, qui ne sait rien de l'appel
+     * 'label'  : libellé lisible, repris dans dernier_evenement
+     * 'hold'   : l'événement décrit un ÉTAT, pas une impulsion. Sa valeur ne
+     *            doit jamais être remise à zéro d'office : une porte ouverte le
+     *            reste jusqu'à ce que le portier annonce le contraire. Sans ce
+     *            drapeau, le Stop de synthèse du démon refermait la porte cinq
+     *            secondes après l'avoir ouverte — constaté, et parfaitement
+     *            silencieux.
+     */
+    private static $_events = array(
+        /* --- Appel ------------------------------------------------------- */
+        /* State porte tout : le traitement est à part, dans applyBackKeyLight(). */
+        'BackKeyLight'   => array('cmd' => null, 'label' => 'Bouton d\'appel'),
+
+        /* Le portier lance son appel SIP vers le moniteur intérieur. C'est le
+         * filet de secours si BackKeyLight venait à manquer. */
+        'Invite'         => array('cmd' => 'sonnerie', 'value' => 1,
+                                  'state' => 'Sonne', 'label' => 'Appel lancé'),
+        /* Le Stop est ici un vrai événement du portier, pas une fin de synthèse :
+         * il dit que l'appel s'est terminé sans réponse. Sans state_stop,
+         * l'état restait sur « Sonne » longtemps après le départ du visiteur. */
+        'CallNoAnswered' => array('cmd' => 'sonnerie', 'value' => 'action',
+                                  'state' => 'Sonne', 'state_stop' => 'Appel manqué',
+                                  'label' => 'Appel sans réponse'),
+        /* IgnoreInvite : le moniteur intérieur a DÉCROCHÉ. Le nom prête à
+         * confusion — il désigne l'invitation SIP que le portier cesse de
+         * relancer — et toutes les implémentations de référence le documentent
+         * comme « VTH answered call from VTO ». Le lire comme un refus mettrait
+         * l'état exactement à l'envers. */
+        'IgnoreInvite'   => array('cmd' => 'sonnerie', 'value' => 0,
+                                  'state' => 'En conversation', 'label' => 'Appel décroché'),
+        'PassiveHungup'  => array('cmd' => 'sonnerie', 'value' => 0,
+                                  'state' => 'Repos', 'label' => 'Raccroché'),
+        'CallSnap'       => array('cmd' => null, 'hold' => true, 'label' => 'Image d\'appel'),
+
+        /* --- Porte ------------------------------------------------------- */
+        'AccessControl'  => array('cmd' => null, 'hold' => true, 'label' => 'Ouverture de la porte'),
+        'DoorStatus'     => array('cmd' => 'porte', 'hold' => true, 'label' => 'État de la porte'),
+        'DoorNotClosed'  => array('cmd' => 'porte_non_fermee', 'value' => 'action',
+                                  'label' => 'Porte restée ouverte'),
+
+        /* --- Appareil ---------------------------------------------------- */
+        'AlarmLocal'     => array('cmd' => 'sabotage', 'value' => 'action', 'label' => 'Alarme locale'),
+        'NetAbort'       => array('cmd' => null, 'hold' => true, 'label' => 'Coupure réseau'),
+        'Reboot'         => array('cmd' => null, 'hold' => true, 'label' => 'Redémarrage du portier'),
+    );
+
+    /*
+     * Signification du champ State de BackKeyLight.
+     *
+     * 1 et 2 valent tous deux « ça sonne » : les implémentations de référence se
+     * partagent entre les deux selon le modèle, et rien ne permet de deviner
+     * lequel sort sur un appareil donné. Les accepter tous les deux ne coûte rien.
+     */
+    private static $_backKeyLight = array(
+        0  => array('state' => 'Repos',                 'ring' => 0),
+        1  => array('state' => 'Sonne',                 'ring' => 1),
+        2  => array('state' => 'Sonne',                 'ring' => 1),
+        4  => array('state' => 'Message vocal',         'ring' => 0),
+        5  => array('state' => 'En conversation',       'ring' => 0),
+        6  => array('state' => 'Appel manqué',          'ring' => 0, 'missed' => true),
+        7  => array('state' => 'Appel vers le portier', 'ring' => 0),
+        8  => array('state' => 'Porte déverrouillée',   'ring' => 0),
+        9  => array('state' => 'Déverrouillage refusé', 'ring' => 0),
+        11 => array('state' => 'Portier redémarré',     'ring' => 0),
+    );
+
+    /*
+     * Ce qui déclenche une capture chez le démon. Transmis dans sa
+     * configuration plutôt que codé chez lui : c'est une question de modèle, pas
+     * de plomberie, et cela a sa place ici, à côté de la table des événements.
+     *
+     * BackKeyLight porte une condition, et elle est indispensable : ce code
+     * annonce AUSSI la fin de l'appel (état 5, 6) et le retour au repos (état
+     * 0). Sans la condition, le portier photographiait une deuxième fois
+     * quelques secondes après le départ du visiteur, et la commande Image
+     * finissait par montrer un seuil vide à la place du visage attendu.
+     */
+    public static function ringCodes() {
+        return array(
+            array('code' => 'BackKeyLight', 'field' => 'State', 'values' => array(1, 2)),
+            array('code' => 'Invite'),
+            array('code' => 'CallNoAnswered'),
+        );
+    }
+
+    /*
+     * Codes pour lesquels le démon ne doit produire aucune fin d'office. Ils
+     * sont déduits de la table : la règle appartient au modèle d'événements, le
+     * démon n'a qu'à l'appliquer.
+     */
+    public static function holdCodes() {
+        $codes = array();
+        foreach (self::$_events as $code => $map) {
+            if (!empty($map['hold'])) {
+                $codes[] = $code;
+            }
+        }
+        return $codes;
+    }
+
+    /* ========================================================== DÉMON */
+
+    /*
+     * L'état du processus se détermine indépendamment de « launchable » : si
+     * l'absence de portier configuré rendait aussi l'état « nok », le coeur
+     * croirait le démon arrêté et ne l'arrêterait jamais.
+     */
+    public static function deamon_info() {
+        $return = array('log' => __CLASS__ . 'd', 'state' => 'nok', 'launchable' => 'nok');
+
+        $pid_file = jeedom::getTmpFolder(__CLASS__) . '/deamon.pid';
+        if (file_exists($pid_file)) {
+            $pid = trim(file_get_contents($pid_file));
+            if ($pid != '' && @posix_getsid((int) $pid)) {
+                $return['state'] = 'ok';
+            } else {
+                /* Un fichier de PID orphelin empêcherait à jamais le chien de garde
+                 * de relancer le démon : on le retire dès qu'il ment. */
+                @unlink($pid_file);
+            }
+        }
+
+        $configured = 0;
+        foreach (self::byType(__CLASS__, true) as $eqLogic) {
+            if ($eqLogic->getConfiguration('ip') != '') {
+                $configured++;
+            }
+        }
+        if ($configured > 0) {
+            $return['launchable'] = 'ok';
+        } else {
+            $return['launchable_message'] = __('Aucun portier actif n\'est configuré.', __FILE__);
+        }
+        return $return;
+    }
+
+    public static function deamon_start() {
+        self::deamon_stop();
+
+        $info = self::deamon_info();
+        if ($info['launchable'] != 'ok') {
+            throw new Exception(__('Le démon ne peut pas être lancé :', __FILE__) . ' '
+                              . $info['launchable_message']);
+        }
+
+        $daemon = realpath(__DIR__ . '/../../resources/dahuavtobed/dahuavtobed.php');
+        $cmd  = 'php ' . escapeshellarg($daemon);
+        $cmd .= ' --callback '   . escapeshellarg(self::getCallbackUrl());
+        $cmd .= ' --pid '        . escapeshellarg(jeedom::getTmpFolder(__CLASS__) . '/deamon.pid');
+        $cmd .= ' --socketport ' . escapeshellarg(config::byKey('socketport', __CLASS__, 55061));
+        $cmd .= ' --loglevel '   . escapeshellarg(log::convertLogLevel(log::getLogLevel(__CLASS__)));
+
+        /* La clé API passe par l'entrée standard et jamais par la ligne de
+         * commande : ps est lisible par n'importe quel utilisateur local. */
+        $full = 'echo ' . escapeshellarg(jeedom::getApiKey(__CLASS__)) . ' | ' . $cmd
+              . ' >> ' . log::getPathToLog(__CLASS__ . 'd') . ' 2>&1 &';
+
+        log::add(__CLASS__, 'info', __('Lancement du démon', __FILE__));
+        exec($full);
+
+        for ($i = 1; $i <= 30; $i++) {
+            $info = self::deamon_info();
+            if ($info['state'] == 'ok') {
+                message::removeAll(__CLASS__, 'unableStartDeamon');
+                return true;
+            }
+            sleep(1);
+        }
+
+        /* log::add ne pose un message que si le réglage global addMessageForErrorLog
+         * est actif, et il ne l'est pas par défaut : le message est explicite. */
+        log::add(__CLASS__, 'error', __('Le démon n\'a pas démarré. Consultez le journal', __FILE__)
+               . ' ' . __CLASS__ . 'd.');
+        message::add(__CLASS__, __('Le démon n\'a pas démarré. Consultez le journal', __FILE__)
+                   . ' ' . __CLASS__ . 'd.', null, 'unableStartDeamon');
+        return false;
+    }
+
+    public static function deamon_stop() {
+        $pid_file = jeedom::getTmpFolder(__CLASS__) . '/deamon.pid';
+        if (file_exists($pid_file)) {
+            $pid = trim(file_get_contents($pid_file));
+            if ($pid != '') {
+                system::kill($pid);
+            }
+            @unlink($pid_file);
+        }
+        /* Filets de sécurité : un démon lancé à la main, ou dont le fichier de PID
+         * a été perdu, garderait le port d'ordres occupé. */
+        system::kill('resources/dahuavtobed/dahuavtobed.php');
+        system::fuserk(config::byKey('socketport', __CLASS__, 55061));
+        return true;
+    }
+
+    public static function getCallbackUrl() {
+        return network::getNetworkAccess('internal', 'http:127.0.0.1:port:comp')
+             . '/plugins/dahuavtobe/core/php/jeeDahuaVto.php';
+    }
+
+    /*
+     * Configuration envoyée au démon. Elle est volontairement autosuffisante :
+     * le démon ne charge pas core.inc.php, il ne peut donc rien relire du coeur.
+     * La timezone en fait partie — un processus CLI daterait ses événements en
+     * UTC, et le portier lui-même est à l'heure UTC.
+     */
+    public static function getDaemonConfig() {
+        $stations = array();
+        foreach (self::byType(__CLASS__, true) as $eqLogic) {
+            if ($eqLogic->getConfiguration('ip') == '') {
+                continue;
+            }
+            $stations[] = array(
+                'id'        => (int) $eqLogic->getId(),
+                'name'      => $eqLogic->getHumanName(),
+                'ip'        => $eqLogic->getConfiguration('ip'),
+                'http_port' => (int) $eqLogic->getConfiguration('http_port', 80),
+                'dhip_port' => (int) $eqLogic->getConfiguration('dhip_port', 5000),
+                'username'  => $eqLogic->getConfiguration('username', 'admin'),
+                'password'  => $eqLogic->getConfiguration('password'),
+                'transport' => $eqLogic->getConfiguration('transport', 'auto'),
+                'channel'   => (int) $eqLogic->getConfiguration('channel', 1),
+            );
+        }
+
+        return array(
+            'timezone'        => config::byKey('timezone'),
+            'stations'        => $stations,
+            'heartbeat'       => (int) config::byKey('event_heartbeat', __CLASS__, 10),
+            'reconnect_delay' => (int) config::byKey('reconnect_delay', __CLASS__, 15),
+            'snapshot_on_ring' => (int) config::byKey('snapshot_on_ring', __CLASS__, 1),
+            'snapshot_keep'   => (int) config::byKey('snapshot_keep', __CLASS__, 50),
+            'snapshot_dir'    => self::snapshotDir(),
+            'ring_codes'      => self::ringCodes(),
+            'hold_codes'      => self::holdCodes(),
+            'pulse_duration'  => (int) config::byKey('pulse_duration', __CLASS__, 5),
+        );
+    }
+
+    /* Envoi d'un ordre au démon par le socket local. */
+    public static function sendToDaemon($_payload, $_waitAnswer = false, $_connectTimeout = 2) {
+        $info = self::deamon_info();
+        if ($info['state'] != 'ok') {
+            return false;
+        }
+        $port   = (int) config::byKey('socketport', __CLASS__, 55061);
+        $socket = @stream_socket_client('tcp://127.0.0.1:' . $port, $errno, $errstr, $_connectTimeout);
+        if (!$socket) {
+            log::add(__CLASS__, 'debug', __('Le démon n\'a pas accepté la connexion :', __FILE__)
+                   . ' ' . $errstr);
+            return false;
+        }
+        $_payload['apikey'] = jeedom::getApiKey(__CLASS__);
+        fwrite($socket, json_encode($_payload) . "\n");
+
+        $answer = null;
+        if ($_waitAnswer) {
+            stream_set_timeout($socket, 5);
+            $answer = json_decode(trim((string) fgets($socket, 65536)), true);
+        }
+        fclose($socket);
+        return $_waitAnswer ? $answer : true;
+    }
+
+    /*
+     * Une seule notification par requête HTTP : enregistrer trois portiers d'affilée
+     * ne doit pas reconnecter le démon trois fois.
+     */
+    public static function reloadDaemonConfig() {
+        if (self::$_reloadScheduled) {
+            return;
+        }
+        self::$_reloadScheduled = true;
+        register_shutdown_function(function () {
+            dahuavtobe::sendToDaemon(array('order' => 'reload'));
+        });
+    }
+
+    /* ========================================================== REQUÊTES CGI */
+
+    /* Requête HTTP CGI authentifiée en Digest sur le portier. */
+    public static function cgiRequest($_eqLogic, $_path, $_binary = false, $_timeout = 10, &$_detail = null) {
+        $port = (int) $_eqLogic->getConfiguration('http_port', 80);
+        $url  = 'http://' . $_eqLogic->getConfiguration('ip') . ':' . ($port > 0 ? $port : 80)
+              . '/cgi-bin/' . $_path;
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, array(
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPAUTH       => CURLAUTH_DIGEST,
+            CURLOPT_USERPWD        => $_eqLogic->getConfiguration('username', 'admin') . ':'
+                                    . $_eqLogic->getConfiguration('password'),
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => $_timeout,
+        ));
+        $result = curl_exec($ch);
+        $code   = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error  = curl_error($ch);
+        curl_close($ch);
+
+        $_detail = array('code' => $code, 'curl' => $error);
+
+        if ($result === false || $code != 200) {
+            log::add(__CLASS__, 'error', __('Requête CGI en échec :', __FILE__) . ' ' . $url
+                   . ' (HTTP ' . $code . ($error != '' ? ' / ' . $error : '') . ')');
+            return false;
+        }
+        /* Le portier répond 200 avec un corps « Error: ... » sur une action refusée. */
+        if (!$_binary && stripos(trim($result), 'Error') === 0) {
+            log::add(__CLASS__, 'debug', __('Le portier a refusé la requête :', __FILE__) . ' ' . $_path);
+            return false;
+        }
+        return $result;
+    }
+
+    public static function describeCgiFailure($_detail) {
+        $code = isset($_detail['code']) ? (int) $_detail['code'] : 0;
+        switch ($code) {
+            case 0:
+                return __('Le portier est injoignable. Vérifiez son adresse, son port HTTP et le réseau.', __FILE__)
+                     . (isset($_detail['curl']) && $_detail['curl'] != '' ? ' (' . $_detail['curl'] . ')' : '');
+            case 401:
+            case 403:
+                return __('Le portier a refusé les identifiants.', __FILE__);
+            case 400:
+                return __('Le portier ne propose pas cette fonction, ou refuse ce canal.', __FILE__);
+            case 404:
+                return __('Ce portier ne propose pas cette fonction.', __FILE__);
+        }
+        return __('Le portier a répondu HTTP', __FILE__) . ' ' . $code . '.';
+    }
+
+    /* Test de connexion : renvoie un tableau de lignes lisibles pour l'interface. */
+    public function testConnection() {
+        $lines = array();
+        $detail = null;
+
+        $type = self::cgiRequest($this, 'magicBox.cgi?action=getDeviceType', false, 8, $detail);
+        if ($type === false) {
+            throw new Exception(self::describeCgiFailure($detail));
+        }
+        $lines['type'] = trim(str_replace('type=', '', trim($type)));
+
+        $version = self::cgiRequest($this, 'magicBox.cgi?action=getSoftwareVersion', false, 8);
+        if ($version !== false) {
+            $lines['version'] = trim(str_replace('version=', '', trim($version)));
+        }
+        $serial = self::cgiRequest($this, 'magicBox.cgi?action=getSerialNo', false, 8);
+        if ($serial !== false) {
+            $lines['serial'] = trim(str_replace('sn=', '', trim($serial)));
+        }
+
+        /* L'horloge du portier est souvent en UTC : le signaler évite de chercher
+         * longtemps pourquoi les événements arrivent décalés. */
+        $time = self::cgiRequest($this, 'global.cgi?action=getCurrentTime', false, 8);
+        if ($time !== false) {
+            $lines['time'] = trim(str_replace('result=', '', trim($time)));
+        }
+
+        $this->setConfiguration('model', $lines['type']);
+        if (isset($lines['version'])) {
+            $this->setConfiguration('firmware', $lines['version']);
+        }
+        $this->save(true);
+
+        return $lines;
+    }
+
+    /* ========================================================== CAPTURES */
+
+    public static function snapshotDir() {
+        return __DIR__ . '/../../data/snapshots';
+    }
+
+    /*
+     * Capture immédiate. Le portier répond parfois 200 avec un message texte :
+     * on valide la signature JPEG et non le code HTTP.
+     */
+    public function takeSnapshot() {
+        $channel = (int) $this->getConfiguration('channel', 1);
+        $detail  = null;
+        $image   = self::cgiRequest($this, 'snapshot.cgi?channel=' . $channel, true, 15, $detail);
+
+        if ($image === false || strlen($image) < 1024 || substr($image, 0, 2) !== "\xFF\xD8") {
+            throw new Exception(__('La capture a échoué.', __FILE__) . ' ' . self::describeCgiFailure($detail));
+        }
+
+        $dir = self::snapshotDir();
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+        /* gmdate des deux côtés, et un jeton aléatoire pour que l'URL de l'image
+         * ne soit pas devinable depuis l'horodatage. */
+        $name = 'vto' . $this->getId() . '_' . gmdate('Ymd-His') . '_' . bin2hex(random_bytes(4)) . '.jpg';
+        file_put_contents($dir . '/' . $name, $image);
+
+        $this->purgeSnapshots();
+        $this->checkAndUpdateCmd('snapshot', self::snapshotUrl($name));
+        return $name;
+    }
+
+    public static function snapshotUrl($_name) {
+        return 'plugins/dahuavtobe/core/php/snapshot.php?file=' . rawurlencode($_name);
+    }
+
+    /* Rotation : on garde les N dernières images de ce portier. */
+    public function purgeSnapshots() {
+        $keep  = (int) config::byKey('snapshot_keep', __CLASS__, 50);
+        $files = glob(self::snapshotDir() . '/vto' . $this->getId() . '_*.jpg');
+        if ($files === false || count($files) <= $keep) {
+            return;
+        }
+        sort($files);
+        foreach (array_slice($files, 0, count($files) - $keep) as $old) {
+            @unlink($old);
+        }
+    }
+
+    /* ========================================================== GÂCHE */
+
+    /*
+     * Ouverture de la gâche. Deux verrous, parce qu'une commande Jeedom
+     * s'exécute aussi bien depuis un scénario que depuis un clic involontaire :
+     * le réglage doit être armé dans la configuration du plugin, et la commande
+     * est créée invisible.
+     */
+    public function openDoor() {
+        if ((int) config::byKey('allow_open_door', __CLASS__, 0) !== 1) {
+            throw new Exception(__('L\'ouverture de la porte est désactivée dans la configuration du plugin.', __FILE__));
+        }
+        if ($this->getConfiguration('ip') == '') {
+            throw new Exception(__('Aucune adresse n\'est renseignée pour ce portier.', __FILE__));
+        }
+        $channel = (int) $this->getConfiguration('channel', 1);
+        $userId  = config::byKey('open_door_userid', __CLASS__, 101);
+        $detail  = null;
+
+        $result = self::cgiRequest($this, 'accessControl.cgi?action=openDoor&channel=' . $channel
+                                 . '&UserID=' . rawurlencode($userId) . '&Type=Remote', false, 10, $detail);
+        if ($result === false) {
+            throw new Exception(__('L\'ouverture de la porte a échoué.', __FILE__) . ' '
+                              . self::describeCgiFailure($detail));
+        }
+        log::add(__CLASS__, 'info', __('Ouverture de la porte demandée sur', __FILE__)
+               . ' ' . $this->getHumanName());
+        return true;
+    }
+
+    /* ========================================================== CYCLE DE VIE */
+
+    /*
+     * preSave ne lève jamais d'exception à la création : le coeur crée
+     * l'équipement avec son seul nom, et une validation stricte rendrait le
+     * bouton « Ajouter » définitivement inopérant.
+     */
+    public function preSave() {
+        foreach (array('http_port' => 80, 'dhip_port' => 5000,
+                       'username' => 'admin', 'transport' => 'auto', 'channel' => 1) as $key => $default) {
+            if ($this->getConfiguration($key) === '' || $this->getConfiguration($key) === null) {
+                $this->setConfiguration($key, $default);
+            }
+        }
+        if ($this->getId() == '') {
+            return;
+        }
+        if ($this->getConfiguration('ip') != '' && filter_var($this->getConfiguration('ip'), FILTER_VALIDATE_IP) === false
+            && !preg_match('/^[a-z0-9.\-]+$/i', $this->getConfiguration('ip'))) {
+            throw new Exception(__('L\'adresse du portier n\'est pas une adresse IP ni un nom d\'hôte valide.', __FILE__));
+        }
+    }
+
+    public function postSave() {
+        $this->setLogicalId('vto::' . $this->getId());
+        /* setLogicalId après save() demande une écriture directe : passer par
+         * save() ici relancerait postSave en boucle. */
+        DB::save($this, true);
+
+        $this->createCommands();
+        self::reloadDaemonConfig();
+    }
+
+    public function preRemove() {
+        $this->_removedId = (int) $this->getId();
+        return true;
+    }
+
+    public function postRemove() {
+        if ($this->_removedId > 0) {
+            foreach (glob(self::snapshotDir() . '/vto' . $this->_removedId . '_*.jpg') as $file) {
+                @unlink($file);
+            }
+        }
+        self::reloadDaemonConfig();
+        return true;
+    }
+
+    /* ========================================================== COMMANDES */
+
+    /*
+     * Création idempotente : une commande existante n'est jamais réécrite.
+     * Son nom, sa visibilité et son historisation appartiennent à l'utilisateur
+     * dès qu'il y a touché.
+     */
+    private function addCmdIfMissing($_logicalId, $_name, $_type, $_subType, $_options = array()) {
+        $cmd = cmd::byEqLogicIdAndLogicalId($this->getId(), $_logicalId);
+        if (is_object($cmd)) {
+            return $cmd;
+        }
+
+        $name = $_name;
+        /* L'unicité SQL porte sur (eqLogic_id, name) : une collision ferait
+         * échouer tout l'enregistrement, pas seulement cette commande. */
+        if (is_object(cmd::byEqLogicIdCmdName($this->getId(), $name))) {
+            $name .= ' (' . $_logicalId . ')';
+        }
+
+        $cmd = new dahuavtobeCmd();
+        $cmd->setEqLogic_id($this->getId());
+        $cmd->setLogicalId($_logicalId);
+        $cmd->setName($name);
+        $cmd->setType($_type);
+        $cmd->setSubType($_subType);
+        $cmd->setIsVisible(isset($_options['isVisible']) ? $_options['isVisible'] : 1);
+        $cmd->setIsHistorized(isset($_options['isHistorized']) ? $_options['isHistorized'] : 0);
+        if (isset($_options['generic_type'])) {
+            $cmd->setGeneric_type($_options['generic_type']);
+        }
+        if (isset($_options['order'])) {
+            $cmd->setOrder($_options['order']);
+        }
+        if (isset($_options['unite'])) {
+            $cmd->setUnite($_options['unite']);
+        }
+        if (isset($_options['configuration'])) {
+            foreach ($_options['configuration'] as $key => $value) {
+                $cmd->setConfiguration($key, $value);
+            }
+        }
+        if (isset($_options['template'])) {
+            $cmd->setTemplate('dashboard', $_options['template']);
+            $cmd->setTemplate('mobile', $_options['template']);
+        }
+        $cmd->save();
+        return $cmd;
+    }
+
+    /*
+     * Cinq commandes visibles sur les seize : sonnerie, état de l'appel, porte,
+     * image, en ligne. C'est ce qu'on regarde sur un dashboard.
+     *
+     * Les autres existent, sont alimentées et restent disponibles pour les
+     * scénarios — elles sont simplement masquées. Seize tuiles empilées pour une
+     * sonnette rendraient le dashboard illisible, et l'utilisateur n'a qu'une
+     * case à cocher pour en rendre une visible s'il la veut.
+     */
+    public function createCommands() {
+        $order = 0;
+
+        $this->addCmdIfMissing('sonnerie', __('Sonnerie', __FILE__), 'info', 'binary',
+            array('isHistorized' => 1, 'order' => $order++));
+        $this->addCmdIfMissing('etat_appel', __('État de l\'appel', __FILE__), 'info', 'string',
+            array('order' => $order++));
+        $this->addCmdIfMissing('dernier_appel', __('Dernier appel', __FILE__), 'info', 'string',
+            array('isVisible' => 0, 'order' => $order++));
+        $this->addCmdIfMissing('appel_manque', __('Appel manqué', __FILE__), 'info', 'binary',
+            array('isVisible' => 0, 'isHistorized' => 1, 'order' => $order++));
+
+        $this->addCmdIfMissing('porte', __('Porte', __FILE__), 'info', 'binary',
+            array('generic_type' => 'LOCK_STATE', 'isHistorized' => 1, 'order' => $order++));
+        $this->addCmdIfMissing('dernier_acces', __('Dernier accès', __FILE__), 'info', 'string',
+            array('isVisible' => 0, 'order' => $order++));
+        $this->addCmdIfMissing('porte_non_fermee', __('Porte restée ouverte', __FILE__), 'info', 'binary',
+            array('isVisible' => 0, 'order' => $order++));
+
+        /* Le nom du gabarit est qualifié par l'identifiant du plugin. Sans ce
+         * préfixe, setTemplate() lui colle « core:: » et le coeur retombe
+         * silencieusement sur l'affichage par défaut — une adresse en texte. */
+        $this->addCmdIfMissing('snapshot', __('Image', __FILE__), 'info', 'string',
+            array('generic_type' => 'CAMERA_URL', 'template' => __CLASS__ . '::' . __CLASS__,
+                  'order' => $order++));
+        $this->addCmdIfMissing('en_ligne', __('En ligne', __FILE__), 'info', 'binary',
+            array('generic_type' => 'ONLINE', 'order' => $order++));
+        $this->addCmdIfMissing('sabotage', __('Alarme locale', __FILE__), 'info', 'binary',
+            array('isVisible' => 0, 'order' => $order++));
+        $this->addCmdIfMissing('dernier_evenement', __('Dernier événement', __FILE__), 'info', 'string',
+            array('isVisible' => 0, 'order' => $order++));
+        $this->addCmdIfMissing('dernier_evenement_date', __('Date du dernier événement', __FILE__), 'info', 'string',
+            array('isVisible' => 0, 'order' => $order++));
+
+        $this->addCmdIfMissing('capture', __('Prendre une photo', __FILE__), 'action', 'other',
+            array('order' => $order++));
+        $this->addCmdIfMissing('reconnecter', __('Reconnecter', __FILE__), 'action', 'other',
+            array('isVisible' => 0, 'order' => $order++));
+        /* Créée invisible : l'ouverture d'une porte d'entrée ne doit pas être à
+         * un clic de distance tant que l'utilisateur ne l'a pas voulu. */
+        $this->addCmdIfMissing('ouvrir', __('Ouvrir la porte', __FILE__), 'action', 'other',
+            array('generic_type' => 'LOCK_OPEN', 'isVisible' => 0, 'order' => $order++));
+    }
+
+    /* ========================================================== ÉVÉNEMENTS */
+
+    /*
+     * Codes qui décrivent le déroulement d'un appel. Leur fin fabriquée par le
+     * démon sert de garde-fou : si rien n'a décrit la suite entre-temps, l'appel
+     * est terminé.
+     */
+    const CALL_CODES = array('BackKeyLight', 'Invite', 'CallNoAnswered');
+
+    /*
+     * L'état de l'appel est écrit deux fois : traduit dans la commande, pour
+     * l'utilisateur, et brut dans le cache, pour le plugin.
+     *
+     * Comparer la commande à elle-même reviendrait à comparer des chaînes
+     * traduites : une installation qui passe à l'anglais garderait « Sonne » en
+     * base, la comparaison échouerait, et l'état resterait bloqué sans que rien
+     * ne l'explique.
+     */
+    private function setCallState($_key) {
+        $this->setCache('call_state', $_key);
+        $this->checkAndUpdateCmd('etat_appel', __($_key, __FILE__));
+    }
+
+    private function callState() {
+        return $this->getCache('call_state', 'Repos');
+    }
+
+    /*
+     * Applique un événement reçu du démon.
+     *
+     * Rien n'est jamais rejeté en silence : un code inconnu ne met à jour aucune
+     * commande, mais il est journalisé et conservé dans la mémoire de
+     * diagnostic. C'est ce qui permettra d'ajouter le code d'un autre modèle
+     * sans avoir à instrumenter le démon.
+     */
+    public function applyEvent($_event) {
+        $code   = isset($_event['code']) ? (string) $_event['code'] : '';
+        $action = isset($_event['action']) ? (string) $_event['action'] : 'Pulse';
+        $data   = isset($_event['data']) && is_array($_event['data']) ? $_event['data'] : array();
+        $date   = isset($_event['time']) ? (string) $_event['time'] : date('Y-m-d H:i:s');
+        /* Fin fabriquée par le démon faute d'en recevoir une. Elle suffit à
+         * éteindre une commande, mais elle ne constate rien : on ne lui laisse
+         * pas décrire l'état de l'appel. */
+        $synthetic = !empty($_event['synthetic']);
+
+        $this->pushRaw($_event);
+
+        /*
+         * Fin fabriquée d'un événement d'appel, et personne n'a décrit la suite :
+         * ni décroché, ni appel manqué, ni raccrochage. L'appel est simplement
+         * fini. Sans ce retour au repos, l'état restait sur « Sonne » jusqu'à la
+         * visite suivante — c'est ce qu'on voyait sur le dashboard.
+         */
+        if ($synthetic && $action == 'Stop' && in_array($code, self::CALL_CODES, true)
+            && $this->callState() === 'Sonne') {
+            $this->setCallState('Repos');
+        }
+
+        if (!isset(self::$_events[$code])) {
+            log::add(__CLASS__, 'debug', $this->getHumanName() . ' ' . __('code non traité :', __FILE__)
+                   . ' ' . $code . ' / ' . $action);
+            $this->checkAndUpdateCmd('dernier_evenement', $code . ' ' . $action);
+            $this->checkAndUpdateCmd('dernier_evenement_date', $date);
+            return;
+        }
+        $map = self::$_events[$code];
+
+        /* BackKeyLight porte tout son sens dans son champ State : il a son
+         * propre traitement, et il est le seul. */
+        if ($code == 'BackKeyLight') {
+            $this->applyBackKeyLight($data, $action, $date);
+        } elseif (!empty($map['hold']) && $action == 'Stop') {
+            /* Fin d'un événement d'état : il n'y a rien à remettre à zéro, et
+             * le faire mentirait sur l'état réel de l'appareil. */
+            return;
+        } elseif ($map['cmd'] !== null) {
+            $value = isset($map['value']) ? $map['value'] : 'action';
+            if ($value === 'action') {
+                $value = ($action == 'Stop') ? 0 : 1;
+            } elseif ($action == 'Stop') {
+                /* Une valeur forcée décrit le début de l'événement : sa fin doit
+                 * rendre la commande à zéro, sinon un appel refusé laisserait la
+                 * sonnerie allumée jusqu'au suivant. */
+                $value = 0;
+            }
+            $this->checkAndUpdateCmd($map['cmd'], $value);
+        }
+
+        /* DoorStatus annonce l'état réel de la gâche, indépendamment de Start/Stop. */
+        if ($code == 'DoorStatus' && isset($data['Status'])) {
+            $this->checkAndUpdateCmd('porte', ($data['Status'] == 'Open') ? 1 : 0);
+        }
+
+        /* Qui vient d'ouvrir, et par quel moyen. Method est un entier dont seuls
+         * quelques cas sont documentés ; l'afficher tel quel vaut mieux que de
+         * le taire. */
+        if ($code == 'AccessControl' && $action != 'Stop') {
+            $this->checkAndUpdateCmd('dernier_acces', $date . ' — ' . self::describeAccess($data));
+        }
+
+        if ($action != 'Stop') {
+            if (isset($map['state'])) {
+                $this->setCallState($map['state']);
+            }
+        } elseif (isset($map['state_stop']) && !$synthetic) {
+            $this->setCallState($map['state_stop']);
+        }
+        if (in_array($code, array('Invite', 'CallNoAnswered', 'BackKeyLight'), true) && $action != 'Stop') {
+            $this->checkAndUpdateCmd('dernier_appel', $date);
+        }
+
+        /* Rien de fabriqué ici : cette commande rapporte ce que le portier a
+         * annoncé, et une fin inventée par le démon n'en fait pas partie. */
+        if (!$synthetic) {
+            $label = isset($map['label']) ? __($map['label'], __FILE__) : $code;
+            $this->checkAndUpdateCmd('dernier_evenement', $label . ' (' . $action . ')');
+            $this->checkAndUpdateCmd('dernier_evenement_date', $date);
+        }
+    }
+
+    private function applyBackKeyLight($_data, $_action, $_date) {
+        /*
+         * Fin d'impulsion : le portier n'envoie pas de State, il n'y a donc rien
+         * à lire. C'est pourtant le moment le plus important — c'est lui qui
+         * éteint la sonnerie.
+         *
+         * Sans cette remise à zéro, la commande resterait à 1 jusqu'au prochain
+         * BackKeyLight : si l'appareil n'annonce pas son retour au repos, elle y
+         * resterait indéfiniment, et le déclencheur d'un scénario ne repartirait
+         * plus jamais. Une sonnette est une impulsion, pas un état.
+         */
+        if ($_action == 'Stop') {
+            $this->checkAndUpdateCmd('sonnerie', 0);
+            return;
+        }
+        if (!isset($_data['State'])) {
+            return;
+        }
+        $state = (int) $_data['State'];
+        if (!isset(self::$_backKeyLight[$state])) {
+            log::add(__CLASS__, 'info', $this->getHumanName() . ' '
+                   . __('état de bouton inconnu :', __FILE__) . ' ' . $state);
+            return;
+        }
+        $known = self::$_backKeyLight[$state];
+
+        $this->checkAndUpdateCmd('sonnerie', $known['ring']);
+        $this->setCallState($known['state']);
+        if ($known['ring'] == 1) {
+            $this->checkAndUpdateCmd('dernier_appel', $_date);
+            $this->checkAndUpdateCmd('appel_manque', 0);
+        }
+        if (!empty($known['missed'])) {
+            $this->checkAndUpdateCmd('appel_manque', 1);
+        }
+    }
+
+    /* Traduit le contenu d'un événement d'accès en une ligne lisible. */
+    private static function describeAccess($_data) {
+        $methods = array(
+            1 => 'badge',
+            2 => 'mot de passe',
+            4 => 'à distance',
+            6 => 'empreinte',
+        );
+        $method = isset($_data['Method']) ? (int) $_data['Method'] : 0;
+        $who = isset($_data['UserID']) && $_data['UserID'] !== '' ? (string) $_data['UserID'] : '';
+        $text = isset($methods[$method]) ? __($methods[$method], __FILE__)
+                                         : __('méthode', __FILE__) . ' ' . $method;
+        if ($who !== '') {
+            $text .= ' (' . $who . ')';
+        }
+        if (isset($_data['Status']) && (int) $_data['Status'] === 0) {
+            $text .= ' — ' . __('refusé', __FILE__);
+        }
+        return $text;
+    }
+
+    /*
+     * Mémoire de diagnostic : les cinquante derniers événements bruts.
+     *
+     * En cache et non en base : c'est une aide au réglage, qui ne survit pas à
+     * un redémarrage et n'a pas à encombrer l'historique. Elle existe pour une
+     * raison précise — les codes varient d'un modèle à l'autre, et sans elle il
+     * faudrait brancher un terminal sur le portier pour découvrir lesquels il
+     * envoie.
+     */
+    const RAW_KEEP = 50;
+
+    private function pushRaw($_event) {
+        $key = __CLASS__ . '::raw::' . $this->getId();
+        $raw = cache::byKey($key)->getValue(array());
+        if (!is_array($raw)) {
+            $raw = array();
+        }
+        $raw[] = array(
+            'time'   => isset($_event['time']) ? $_event['time'] : date('Y-m-d H:i:s'),
+            'code'   => isset($_event['code']) ? $_event['code'] : '',
+            'action' => isset($_event['action']) ? $_event['action'] : '',
+            'index'  => isset($_event['index']) ? $_event['index'] : 0,
+            /* Signalé pour ce qu'il est : cette page sert à savoir ce que le
+             * portier envoie, et une fin fabriquée par le plugin s'y ferait
+             * passer pour une observation. */
+            'synthetic' => !empty($_event['synthetic']),
+            'data'   => isset($_event['data']) ? $_event['data'] : array(),
+        );
+        if (count($raw) > self::RAW_KEEP) {
+            $raw = array_slice($raw, -self::RAW_KEEP);
+        }
+        cache::set($key, $raw, 7200);
+    }
+
+    public function rawEvents() {
+        $raw = cache::byKey(__CLASS__ . '::raw::' . $this->getId())->getValue(array());
+        return is_array($raw) ? array_reverse($raw) : array();
+    }
+
+    /* ========================================================== CRON */
+
+    /*
+     * Cron minute : joignabilité du portier, mais seulement quand le démon ne
+     * tourne pas.
+     *
+     * Les deux écrivent sur la même commande, et ils ne parlent pas de la même
+     * chose : le démon rend compte de la liaison d'événements, le cron d'une
+     * simple requête HTTP. Les laisser cohabiter fait clignoter le témoin —
+     * le démon signale la coupure, le cron la nie dans la minute, et
+     * l'utilisateur voit un portier qui va et vient sans raison. Le démon a le
+     * dernier mot dès qu'il est là : c'est lui qui sait si les événements
+     * passent, et c'est la seule chose qui compte pour une sonnette.
+     */
+    public static function cron() {
+        try {
+            if (self::deamon_info()['state'] == 'ok') {
+                return;
+            }
+        } catch (Throwable $e) {
+            /* Impossible de savoir : on sonde, une information vaut mieux qu'aucune. */
+            log::add(__CLASS__, 'debug', __('État du démon indéterminé :', __FILE__) . ' ' . $e->getMessage());
+        }
+
+        foreach (self::byType(__CLASS__, true) as $eqLogic) {
+            try {
+                if ($eqLogic->getConfiguration('ip') == '') {
+                    continue;
+                }
+                $alive = self::cgiRequest($eqLogic, 'magicBox.cgi?action=getDeviceType', false, 5) !== false;
+                $eqLogic->checkAndUpdateCmd('en_ligne', $alive ? 1 : 0);
+            } catch (Throwable $e) {
+                /* Un portier en échec ne doit pas priver les autres de leur tour. */
+                log::add(__CLASS__, 'error', $eqLogic->getHumanName() . ' : ' . $e->getMessage());
+            }
+        }
+    }
+
+    /*
+     * Page Santé de Jeedom.
+     *
+     * STATIQUE, et ce n'est pas un détail de style : desktop/php/health.php teste
+     * method_exists() puis appelle <plugin>::health() en statique. Une méthode
+     * d'instance passe le test et fait lever une Error à l'appel — que le
+     * catch (Exception) du coeur ne rattrape pas. Ce n'est alors pas le plugin
+     * qui tombe, mais la page Santé de toute l'installation, en erreur 500.
+     */
+    public static function health() {
+        $return = array();
+
+        foreach (self::byType(__CLASS__) as $eqLogic) {
+            $name = $eqLogic->getHumanName(true);
+
+            $hasIp = $eqLogic->getConfiguration('ip') != '';
+            $return[] = array(
+                'test'   => $name . ' — ' . __('adresse renseignée', __FILE__),
+                'result' => $hasIp ? $eqLogic->getConfiguration('ip') : __('NOK', __FILE__),
+                'advice' => $hasIp ? '' : __('Renseignez l\'adresse du portier.', __FILE__),
+                'state'  => $hasIp,
+            );
+
+            /* Un équipement sans objet parent n'apparaît sur aucun dashboard, et
+             * rien d'autre dans Jeedom ne le signale. */
+            $hasObject = $eqLogic->getObject_id() != '';
+            $return[] = array(
+                'test'   => $name . ' — ' . __('rattaché à un objet', __FILE__),
+                'result' => $hasObject ? __('OK', __FILE__) : __('NOK', __FILE__),
+                'advice' => $hasObject ? '' : __('Sans objet parent, l\'équipement n\'apparaît sur aucun dashboard.', __FILE__),
+                'state'  => $hasObject,
+            );
+
+            /* L'état qui compte vraiment : le flux d'événements passe-t-il ?
+             * Un portier joignable mais dont la liaison est tombée ne sonnera
+             * jamais dans Jeedom, et cela ne se voit nulle part ailleurs. */
+            $online = $eqLogic->getCmd(null, 'en_ligne');
+            $isOnline = is_object($online) && $online->execCmd() == 1;
+            $return[] = array(
+                'test'   => $name . ' — ' . __('liaison établie', __FILE__),
+                'result' => $isOnline ? __('OK', __FILE__) : __('NOK', __FILE__),
+                'advice' => $isOnline ? '' : __('Le portier ne répond pas, ou le démon n\'est pas démarré.', __FILE__),
+                'state'  => $isOnline,
+            );
+        }
+
+        return $return;
+    }
+}
+
+/*
+ * La classe de commande est obligatoire, même réduite au minimum : sans elle
+ * le coeur refuse de créer et d'ouvrir un équipement.
+ */
+class dahuavtobeCmd extends cmd {
+
+    public function execute($_options = array()) {
+        $eqLogic = $this->getEqLogic();
+
+        switch ($this->getLogicalId()) {
+            case 'capture':
+                $eqLogic->takeSnapshot();
+                break;
+
+            case 'ouvrir':
+                $eqLogic->openDoor();
+                break;
+
+            case 'reconnecter':
+                dahuavtobe::sendToDaemon(array('order' => 'reconnect', 'id' => (int) $eqLogic->getId()));
+                break;
+        }
+        return true;
+    }
+}

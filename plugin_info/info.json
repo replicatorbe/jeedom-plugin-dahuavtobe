@@ -1,0 +1,32 @@
+{
+    "id": "dahuavtobe",
+    "name": "Dahua VTO",
+    "pluginVersion": "0.1",
+    "description": {
+        "fr_FR": "Connexion directe à un portier vidéo Dahua VTO, sans passer par un enregistreur. Le plugin reçoit en temps réel les appels de la sonnette, les fins d'appel sans réponse, les ouvertures de gâche et les alarmes de l'appareil, et capture automatiquement le visage du visiteur au moment où il sonne. L'image et l'adresse du flux vidéo sont exposées comme commandes, utilisables dans un scénario, une notification ou un widget.",
+        "en_US": "Direct connection to a Dahua VTO door station, with no recorder in between. The plugin receives doorbell calls, unanswered call endings, door unlock events and device alarms in real time, and automatically captures the visitor's face the moment they ring. The snapshot and the video stream address are exposed as commands, usable in a scenario, a notification or a widget."
+    },
+    "licence": "AGPL",
+    "author": "sMug (Jérôme Fafchamps)",
+    "require": "4.4",
+    "requireOsVersion": "11",
+    "category": "security",
+    "index": "dahuavtobe",
+    "hasDependency": 0,
+    "hasOwnDeamon": 1,
+    "maxDependancyInstallTime": 5,
+    "eventjs": 0,
+    "issue": "https://github.com/replicatorbe/jeedom-plugin-dahuavtobe/issues",
+    "documentation": "https://github.com/replicatorbe/jeedom-plugin-dahuavtobe/blob/master/docs/#language#/index.md",
+    "changelog": "https://github.com/replicatorbe/jeedom-plugin-dahuavtobe/blob/master/docs/#language#/changelog.md",
+    "language": [
+        "fr_FR",
+        "en_US"
+    ],
+    "compatibility": [
+        "smart",
+        "rpi",
+        "docker",
+        "diy"
+    ]
+}
