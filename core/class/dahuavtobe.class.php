@@ -80,6 +80,12 @@ class dahuavtobe extends eqLogic {
         'PassiveHungup'  => array('cmd' => 'sonnerie', 'value' => 0,
                                   'state' => 'Repos', 'label' => 'Raccroché'),
         'CallSnap'       => array('cmd' => null, 'hold' => true, 'label' => 'Image d\'appel'),
+        /* Compte rendu que le portier écrit dans son journal à la fin de chaque
+         * appel. EndState « Missed » est, sur le VTO2211G, le seul signal
+         * direct d'un appel manqué : BackKeyLight n'y arrive jamais. Le
+         * traitement est à part, dans applyVideoTalkLog(). Événement ponctuel,
+         * sans fin : hold empêche le démon d'en fabriquer une. */
+        'VideoTalkLog'   => array('cmd' => null, 'hold' => true, 'label' => 'Fin d\'appel'),
 
         /* --- Porte ------------------------------------------------------- */
         'AccessControl'  => array('cmd' => null, 'hold' => true, 'label' => 'Ouverture de la porte'),
@@ -91,7 +97,25 @@ class dahuavtobe extends eqLogic {
         'AlarmLocal'     => array('cmd' => 'sabotage', 'value' => 'action', 'label' => 'Alarme locale'),
         'NetAbort'       => array('cmd' => null, 'hold' => true, 'label' => 'Coupure réseau'),
         'Reboot'         => array('cmd' => null, 'hold' => true, 'label' => 'Redémarrage du portier'),
+
+        /* --- Plugin ------------------------------------------------------ */
+        /* Émis par jeeDahuaVto.php lui-même, juste après son avertissement :
+         * seulement pour que « Dernier événement » le dise en clair. */
+        'SnapshotFailed' => array('cmd' => null, 'hold' => true, 'label' => 'Capture impossible'),
     );
+
+    /*
+     * Codes connus et délibérément laissés de côté. Ils restent dans la mémoire
+     * de diagnostic, mais ne touchent ni au journal ni à « Dernier événement » :
+     * chaque appel en produit une demi-douzaine, qui noyaient les lignes utiles.
+     *
+     * DGSErrorReport : même ErrorCode à chaque appel, sans conséquence visible.
+     * _DoTalkAction_, _CallNoAnswer_, RequestCallState : doublons internes de
+     *   ce que disent déjà Invite, CallNoAnswered et VideoTalkLog.
+     * DoorControl : doublon d'AccessControl.
+     */
+    private static $_quiet = array('DGSErrorReport', '_DoTalkAction_', '_CallNoAnswer_',
+                                   'RequestCallState', 'DoorControl');
 
     /*
      * Signification du champ State de BackKeyLight.
@@ -364,7 +388,10 @@ class dahuavtobe extends eqLogic {
     /* ========================================================== REQUÊTES CGI */
 
     /* Requête HTTP CGI authentifiée en Digest sur le portier. */
-    public static function cgiRequest($_eqLogic, $_path, $_binary = false, $_timeout = 10, &$_detail = null) {
+    /* $_logLevel : les appelants réguliers (sonde du cron, rattrapage) passent
+     * 'debug'. Un portier débranché, sinon, faisait 1 440 erreurs par jour, et
+     * la commande « En ligne » dit déjà ce qu'il en est. */
+    public static function cgiRequest($_eqLogic, $_path, $_binary = false, $_timeout = 10, &$_detail = null, $_logLevel = 'error') {
         $port = (int) $_eqLogic->getConfiguration('http_port', 80);
         $url  = 'http://' . $_eqLogic->getConfiguration('ip') . ':' . ($port > 0 ? $port : 80)
               . '/cgi-bin/' . $_path;
@@ -386,7 +413,7 @@ class dahuavtobe extends eqLogic {
         $_detail = array('code' => $code, 'curl' => $error);
 
         if ($result === false || $code != 200) {
-            log::add(__CLASS__, 'error', __('Requête CGI en échec :', __FILE__) . ' ' . $url
+            log::add(__CLASS__, $_logLevel, __('Requête CGI en échec :', __FILE__) . ' ' . $url
                    . ' (HTTP ' . $code . ($error != '' ? ' / ' . $error : '') . ')');
             return false;
         }
@@ -453,6 +480,23 @@ class dahuavtobe extends eqLogic {
 
     /* ========================================================== CAPTURES */
 
+    /*
+     * Forme de tout nom de capture : vto<id>_<date>_<jeton>.jpg.
+     *
+     * Une seule expression pour le passe-plat qui sert l'image et pour le
+     * point d'entrée qui reçoit les noms du démon : deux copies finiraient par
+     * diverger, et l'une des deux portes laisserait passer ce que l'autre
+     * refuse. Le groupe capture l'identifiant du portier, dont le passe-plat a
+     * besoin pour vérifier les droits ; les autres l'ignorent.
+     *
+     * Le modificateur D compte : sans lui, « $ » tolère un saut de ligne final.
+     *
+     * Le démon compose aussi ces noms (VtoDaemon::fetchSnapshot) mais
+     * ne charge pas le coeur : il garde sa propre écriture, qui doit rester
+     * conforme à celle-ci.
+     */
+    const SNAPSHOT_PATTERN = '/^vto(\d+)_\d{8}-\d{6}_[0-9a-f]{8}\.jpg$/D';
+
     public static function snapshotDir() {
         return __DIR__ . '/../../data/snapshots';
     }
@@ -481,6 +525,7 @@ class dahuavtobe extends eqLogic {
 
         $this->purgeSnapshots();
         $this->checkAndUpdateCmd('snapshot', self::snapshotUrl($name));
+        $this->checkAndUpdateCmd('snapshot_file', self::snapshotPath($name));
         return $name;
     }
 
@@ -488,9 +533,48 @@ class dahuavtobe extends eqLogic {
         return 'plugins/dahuavtobe/core/php/snapshot.php?file=' . rawurlencode($_name);
     }
 
+    /*
+     * Chemin absolu de l'image sur le disque, pour les notifications.
+     *
+     * L'URL de snapshotUrl() exige une session Jeedom : Telegram, un serveur de
+     * mail ou un téléphone ne l'ouvriront jamais. Un plugin de notification,
+     * lui, tourne sur la même machine et sait joindre un fichier local.
+     *
+     * realpath retire le « .. » de snapshotDir() : certains plugins comparent
+     * le chemin reçu à une racine autorisée, ou l'affichent tel quel dans leur
+     * journal. Il échoue si le dossier n'existe pas encore ; le chemin brut
+     * reste alors valable, simplement moins lisible.
+     */
+    public static function snapshotPath($_name) {
+        $dir = realpath(self::snapshotDir());
+        return ($dir !== false ? $dir : self::snapshotDir()) . '/' . $_name;
+    }
+
+    /*
+     * Widget de la commande Image (« dahuavtobe::dahuavtobe »).
+     *
+     * Ses textes passent par ici plutôt que par des {{…}} dans le modèle : le
+     * cœur traduit un modèle de plugin sous le nom core/template/…, sans le
+     * préfixe plugins/dahuavtobe/, et ne trouve donc jamais nos traductions.
+     * Le cœur change les guillemets doubles des valeurs en simples : le modèle
+     * les place entre guillemets doubles, où une apostrophe ne gêne pas.
+     */
+    public static function templateWidget() {
+        return array('info' => array('string' => array('dahuavtobe' => array(
+            'template' => 'dahuavtobe',
+            'replace'  => array(
+                '#vto_no_image#'  => __('Aucune image pour le moment.', __FILE__),
+                '#vto_not_found#' => __('Image introuvable — elle a probablement été effacée par la rotation.', __FILE__),
+                '#vto_open#'      => __('Ouvrir l\'image en grand', __FILE__),
+            ),
+        ))));
+    }
+
     /* Rotation : on garde les N dernières images de ce portier. */
     public function purgeSnapshots() {
-        $keep  = (int) config::byKey('snapshot_keep', __CLASS__, 50);
+        /* Au moins une : à 0, la photo qu'on vient de prendre partait avec les
+         * autres, et la commande Image pointait sur un fichier effacé. */
+        $keep  = max(1, (int) config::byKey('snapshot_keep', __CLASS__, 50));
         $files = glob(self::snapshotDir() . '/vto' . $this->getId() . '_*.jpg');
         if ($files === false || count($files) <= $keep) {
             return;
@@ -504,31 +588,11 @@ class dahuavtobe extends eqLogic {
     /* ========================================================== GÂCHE */
 
     /*
-     * Interroge l'état réel de la gâche.
-     *
-     * Rend true (ouverte), false (fermée) ou null si le portier n'a pas su
-     * répondre — et null n'est pas false : une commande qui affiche « fermée »
-     * sans l'avoir vérifié est une affirmation, pas une mesure, et c'est
-     * exactement ce qu'on cherche à éviter sur une porte d'entrée.
-     */
-    public function doorStatus() {
-        $channel = (int) $this->getConfiguration('channel', 1);
-        $result = self::cgiRequest($this, 'accessControl.cgi?action=getDoorStatus&channel=' . $channel, false, 8);
-        if ($result === false) {
-            return null;
-        }
-        if (preg_match('/status\s*=\s*(\w+)/i', $result, $m)) {
-            return (strtolower($m[1]) == 'open');
-        }
-        return null;
-    }
-
-
-    /*
-     * Ouverture de la gâche. Deux verrous, parce qu'une commande Jeedom
+     * Ouverture de la gâche. Trois verrous, parce qu'une commande Jeedom
      * s'exécute aussi bien depuis un scénario que depuis un clic involontaire :
-     * le réglage doit être armé dans la configuration du plugin, et la commande
-     * est créée invisible.
+     * le réglage doit être armé dans la configuration du plugin, la commande
+     * est créée invisible, et elle demande confirmation au clic. Seul le
+     * premier retient un scénario : c'est celui qui est contrôlé ici.
      */
     public function openDoor() {
         if ((int) config::byKey('allow_open_door', __CLASS__, 0) !== 1) {
@@ -686,6 +750,12 @@ class dahuavtobe extends eqLogic {
         $this->addCmdIfMissing('snapshot', __('Image', __FILE__), 'info', 'string',
             array('generic_type' => 'CAMERA_URL', 'template' => __CLASS__ . '::' . __CLASS__,
                   'order' => $order++));
+        /* Double de la précédente, pour les scénarios : un chemin de fichier
+         * que les plugins de notification savent joindre, là où l'URL protégée
+         * par session ne sert qu'au dashboard. Masquée, car illisible sur une
+         * tuile. */
+        $this->addCmdIfMissing('snapshot_file', __('Fichier image', __FILE__), 'info', 'string',
+            array('isVisible' => 0, 'order' => $order++));
         $this->addCmdIfMissing('en_ligne', __('En ligne', __FILE__), 'info', 'binary',
             array('generic_type' => 'ONLINE', 'order' => $order++));
         $this->addCmdIfMissing('sabotage', __('Alarme locale', __FILE__), 'info', 'binary',
@@ -700,9 +770,15 @@ class dahuavtobe extends eqLogic {
         $this->addCmdIfMissing('reconnecter', __('Reconnecter', __FILE__), 'action', 'other',
             array('isVisible' => 0, 'order' => $order++));
         /* Créée invisible : l'ouverture d'une porte d'entrée ne doit pas être à
-         * un clic de distance tant que l'utilisateur ne l'a pas voulu. */
+         * un clic de distance tant que l'utilisateur ne l'a pas voulu.
+         * actionConfirm vaut 1 ou rien : le coeur ne compare qu'à 1. Il ne joue
+         * que pour les exécutions venues de l'interface (widget, application
+         * via JSON-RPC), qui reçoivent un refus -32006 puis rejouent l'appel
+         * après la boîte « Êtes-vous sûr » ; un scénario ou l'API HTTP appellent
+         * execCmd() directement et ouvrent sans rien demander. */
         $this->addCmdIfMissing('ouvrir', __('Ouvrir la porte', __FILE__), 'action', 'other',
-            array('generic_type' => 'LOCK_OPEN', 'isVisible' => 0, 'order' => $order++));
+            array('generic_type' => 'LOCK_OPEN', 'isVisible' => 0, 'order' => $order++,
+                  'configuration' => array('actionConfirm' => 1)));
     }
 
     /* ========================================================== ÉVÉNEMENTS */
@@ -750,6 +826,13 @@ class dahuavtobe extends eqLogic {
          * pas décrire l'état de l'appel. */
         $synthetic = !empty($_event['synthetic']);
 
+        /* Fin fabriquée d'un code que le plugin ne traite pas : elle n'éteint
+         * rien, et le démon l'a inventée. La journaliser doublait chaque ligne
+         * « code non traité », et l'afficher faisait parler le portier à sa place. */
+        if ($synthetic && !isset(self::$_events[$code])) {
+            return;
+        }
+
         $this->pushRaw($_event);
 
         /*
@@ -763,6 +846,9 @@ class dahuavtobe extends eqLogic {
             $this->setCallState('Repos');
         }
 
+        if (in_array($code, self::$_quiet, true)) {
+            return;
+        }
         if (!isset(self::$_events[$code])) {
             log::add(__CLASS__, 'debug', $this->getHumanName() . ' ' . __('code non traité :', __FILE__)
                    . ' ' . $code . ' / ' . $action);
@@ -776,6 +862,8 @@ class dahuavtobe extends eqLogic {
          * propre traitement, et il est le seul. */
         if ($code == 'BackKeyLight') {
             $this->applyBackKeyLight($data, $action, $date);
+        } elseif ($code == 'VideoTalkLog') {
+            $this->applyVideoTalkLog($data, $action, $date);
         } elseif (!empty($map['hold']) && $action == 'Stop') {
             /* Fin d'un événement d'état : il n'y a rien à remettre à zéro, et
              * le faire mentirait sur l'état réel de l'appareil. */
@@ -812,8 +900,15 @@ class dahuavtobe extends eqLogic {
         } elseif (isset($map['state_stop']) && !$synthetic) {
             $this->setCallState($map['state_stop']);
         }
-        if (in_array($code, array('Invite', 'CallNoAnswered', 'BackKeyLight'), true) && $action != 'Stop') {
+        if (in_array($code, self::CALL_CODES, true) && $action != 'Stop') {
             $this->checkAndUpdateCmd('dernier_appel', $date);
+        }
+        /* Nouvelle sonnerie : l'appel manqué précédent n'est plus d'actualité.
+         * BackKeyLight le fait de son côté ; sur un modèle qui ne l'envoie
+         * pas, sans ceci, la commande resterait à 1 pour toujours. */
+        if (($code == 'Invite' || $code == 'CallNoAnswered') && $action != 'Stop' && !$synthetic) {
+            $this->checkAndUpdateCmd('appel_manque', 0);
+            $this->rememberLiveRing($date);
         }
 
         /* Rien de fabriqué ici : cette commande rapporte ce que le portier a
@@ -856,10 +951,50 @@ class dahuavtobe extends eqLogic {
         if ($known['ring'] == 1) {
             $this->checkAndUpdateCmd('dernier_appel', $_date);
             $this->checkAndUpdateCmd('appel_manque', 0);
+            $this->rememberLiveRing($_date);
         }
         if (!empty($known['missed'])) {
             $this->checkAndUpdateCmd('appel_manque', 1);
+            $this->countLiveMissedCall($_date);
         }
+    }
+
+    /*
+     * Fin d'appel écrite au journal du portier. Seul EndState « Missed »
+     * change quelque chose : un appel décroché a déjà été décrit par
+     * IgnoreInvite. Sur un modèle qui envoie aussi BackKeyLight à l'état 6,
+     * l'anti-rebond de countLiveMissedCall() évite de compter l'appel deux fois.
+     */
+    private function applyVideoTalkLog($_data, $_action, $_date) {
+        if ($_action == 'Stop' || !isset($_data['EndState']) || $_data['EndState'] != 'Missed') {
+            return;
+        }
+        $this->checkAndUpdateCmd('sonnerie', 0);
+        $this->setCallState('Appel manqué');
+        $this->checkAndUpdateCmd('appel_manque', 1);
+        $this->countLiveMissedCall($_date);
+    }
+
+    /*
+     * Sonneries vues en direct : le rattrapage les écarte pour ne pas annoncer
+     * comme « rattrapée » une sonnerie déjà signalée. Gardées au moins jusqu'à
+     * la relecture suivante du journal, quel que soit son intervalle.
+     * Invite et CallNoAnswered arrivent dans la même seconde : une seule entrée.
+     */
+    private function rememberLiveRing($_date) {
+        $time = strtotime($_date);
+        if ($time === false) {
+            return;
+        }
+        $keep = max(3600, (int) config::byKey('call_history_interval', __CLASS__, 15) * 60 + 600);
+        $rings = array();
+        foreach ((array) $this->getCache('live_rings', array()) as $ring) {
+            if ((int) $ring > $time - $keep && abs((int) $ring - $time) > dahuavtobeCallLog::LIVE_MATCH) {
+                $rings[] = (int) $ring;
+            }
+        }
+        $rings[] = $time;
+        $this->setCache('live_rings', $rings);
     }
 
     /* Traduit le contenu d'un événement d'accès en une ligne lisible. */
@@ -945,7 +1080,8 @@ class dahuavtobe extends eqLogic {
         }
         $this->setCache('backfill_run', time());
 
-        $raw = self::cgiRequest($this, 'recordFinder.cgi?action=find&name=' . dahuavtobeCallLog::LOG_NAME, false, 20);
+        $raw = self::cgiRequest($this, 'recordFinder.cgi?action=find&name=' . dahuavtobeCallLog::LOG_NAME,
+                                false, 20, $detail, 'debug');
         if ($raw === false) {
             log::add(__CLASS__, 'debug', $this->getHumanName() . ' '
                    . __('journal d\'appels illisible', __FILE__));
@@ -981,7 +1117,8 @@ class dahuavtobe extends eqLogic {
             return 0;
         }
 
-        $nouveaux = dahuavtobeCallLog::since($calls, $mark, $now);
+        $nouveaux = dahuavtobeCallLog::withoutLive(dahuavtobeCallLog::since($calls, $mark, $now),
+                                                   (array) $this->getCache('live_rings', array()));
         $recovered = count($nouveaux);
         foreach ($nouveaux as $call) {
             log::add(__CLASS__, 'info', $this->getHumanName() . ' '
@@ -1038,6 +1175,34 @@ class dahuavtobe extends eqLogic {
         $this->checkAndUpdateCmd('appels_manques_24h', dahuavtobeCallLog::countMissed($_calls, $_now));
     }
 
+    /*
+     * Appel manqué annoncé en direct : le compteur avance tout de suite, sans
+     * attendre la relecture du journal.
+     *
+     * Deux signaux y mènent : BackKeyLight à l'état 6, et VideoTalkLog avec
+     * EndState « Missed » — le seul des deux que le VTO2211G envoie. Un modèle
+     * qui enverrait les deux est couvert par l'anti-rebond. CallNoAnswered n'y
+     * mène pas : son Stop n'est pas garanti, et le rattrapage le compte.
+     *
+     * Aucune requête au portier ici : ce chemin tourne dans la requête qui
+     * traite un lot d'événements du démon, et une relecture du journal —
+     * jusqu'à vingt secondes — retarderait tout ce qui suit dans le lot.
+     */
+    private function countLiveMissedCall($_date) {
+        $eventTime = strtotime($_date);
+        $interval = (int) config::byKey('call_history_interval', __CLASS__, 15);
+        if (!dahuavtobeCallLog::liveMissedCounts($eventTime === false ? 0 : $eventTime,
+                (int) $this->getCache('missed_live_at', 0), (int) $this->getCache('backfill_run', 0), $interval)) {
+            return;
+        }
+        $cmd = $this->getCmd('info', 'appels_manques_24h');
+        if (!is_object($cmd)) {
+            return;
+        }
+        $this->setCache('missed_live_at', $eventTime);
+        $this->checkAndUpdateCmd('appels_manques_24h', (int) $cmd->execCmd() + 1);
+    }
+
     /* ========================================================== CRON */
 
     /*
@@ -1067,7 +1232,8 @@ class dahuavtobe extends eqLogic {
                     continue;
                 }
                 if (!$daemonUp) {
-                    $alive = self::cgiRequest($eqLogic, 'magicBox.cgi?action=getDeviceType', false, 5) !== false;
+                    $alive = self::cgiRequest($eqLogic, 'magicBox.cgi?action=getDeviceType', false, 5,
+                                              $detail, 'debug') !== false;
                     $eqLogic->checkAndUpdateCmd('en_ligne', $alive ? 1 : 0);
                     if (!$alive) {
                         continue;             // inutile de réclamer son journal à un portier muet

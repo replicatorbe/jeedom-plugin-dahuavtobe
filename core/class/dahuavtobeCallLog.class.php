@@ -165,9 +165,69 @@ class dahuavtobeCallLog {
         return $nouveaux;
     }
 
+    /* Écart toléré entre une sonnerie vue en direct et l'appel du journal qui
+     * la décrit : le CreateTime du journal suit la sonnerie de quelques
+     * secondes, et l'horloge du portier peut dériver un peu de celle de Jeedom. */
+    const LIVE_MATCH = 90;
+
+    /* Retire des appels à rattraper ceux que le flux a déjà signalés en direct.
+     * Ils restent dans le journal complet : countMissed() les compte toujours. */
+    public static function withoutLive($_calls, $_liveTimes, $_tolerance = self::LIVE_MATCH) {
+        $restants = array();
+        foreach ($_calls as $call) {
+            $vu = false;
+            foreach ($_liveTimes as $live) {
+                if (isset($call['time']) && abs($call['time'] - (int) $live) <= $_tolerance) {
+                    $vu = true;
+                    break;
+                }
+            }
+            if (!$vu) {
+                $restants[] = $call;
+            }
+        }
+        return $restants;
+    }
+
+    /* Deux annonces d'appel manqué plus proches que ça décrivent le même appel. */
+    const LIVE_DEBOUNCE = 60;
+
+    /*
+     * Un appel manqué annoncé en direct doit-il ajouter un au compteur ?
+     *
+     * Le compteur exact vient du journal, et de lui seul : l'incrément direct
+     * n'est qu'une avance prise sur le prochain rattrapage, pour que le chiffre
+     * bouge quand l'appel a lieu et non un quart d'heure plus tard. D'où les
+     * trois refus.
+     *
+     * Rattrapage désactivé : personne ne ferait jamais redescendre le chiffre.
+     * Un appel de la semaine dernière y serait encore compté « sur 24 h », et
+     * le compteur ne ferait que grimper — un faux chiffre vaut moins qu'aucun.
+     *
+     * Annonce répétée : le portier peut redire le même état à quelques secondes
+     * d'écart, et un rejeu du démon aussi. Un appel ne compte qu'une fois.
+     *
+     * Journal relu APRÈS l'appel : le rattrapage vient de le compter, l'ajouter
+     * encore le compterait deux fois jusqu'au passage suivant. Dans le doute —
+     * enregistrement pas encore écrit au moment de la relecture — le compteur
+     * a un appel de retard pendant un intervalle, jamais un de trop.
+     */
+    public static function liveMissedCounts($_eventTime, $_lastLive, $_lastBackfill, $_interval) {
+        if ((int) $_interval <= 0 || $_eventTime <= 0) {
+            return false;
+        }
+        if ($_lastLive > 0 && abs($_eventTime - $_lastLive) < self::LIVE_DEBOUNCE) {
+            return false;
+        }
+        if ($_lastBackfill > 0 && $_lastBackfill >= $_eventTime) {
+            return false;
+        }
+        return true;
+    }
+
     /* Sonneries restées sans réponse sur la fenêtre donnée. Recalculé à chaque
-     * passage depuis le journal complet : il n'y a rien à incrémenter, donc rien
-     * à compter deux fois. */
+     * passage depuis le journal complet, ce qui efface au passage toute avance
+     * prise en direct par liveMissedCounts() : ce qui est compté ici fait foi. */
     public static function countMissed($_calls, $_now, $_window = 86400) {
         $total = 0;
         foreach ($_calls as $call) {

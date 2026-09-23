@@ -52,6 +52,7 @@ function dahuavtobe_update() {
             $eqLogic->createCommands();
         }
         dahuavtobe_migrateSnapshotWidget();
+        dahuavtobe_migrateOpenDoorConfirm();
     } catch (Throwable $e) {
         log::add('dahuavtobe', 'error', __('Mise à jour du plugin :', __FILE__) . ' ' . $e->getMessage());
     }
@@ -84,6 +85,28 @@ function dahuavtobe_migrateSnapshotWidget() {
         }
     }
     config::save('migration::snapshot_widget', 1, 'dahuavtobe');
+}
+
+/*
+ * L'ouverture de la porte demande désormais confirmation au clic. createCommands()
+ * ne touche pas une commande qui existe déjà : les portiers créés avant n'en
+ * profiteraient jamais sans ce rattrapage.
+ *
+ * Une seule fois, comme la migration précédente : l'utilisateur qui décoche
+ * ensuite la confirmation l'a voulu, et une mise à jour n'a pas à la lui remettre.
+ */
+function dahuavtobe_migrateOpenDoorConfirm() {
+    if (config::byKey('migration::open_door_confirm', 'dahuavtobe', 0) == 1) {
+        return;
+    }
+    foreach (dahuavtobe::byType('dahuavtobe') as $eqLogic) {
+        $open = cmd::byEqLogicIdAndLogicalId($eqLogic->getId(), 'ouvrir');
+        if (is_object($open) && $open->getConfiguration('actionConfirm') != 1) {
+            $open->setConfiguration('actionConfirm', 1);
+            $open->save();
+        }
+    }
+    config::save('migration::open_door_confirm', 1, 'dahuavtobe');
 }
 
 /*

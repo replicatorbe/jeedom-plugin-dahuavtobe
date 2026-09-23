@@ -25,6 +25,7 @@
         "Dernier accès": "Last access",
         "Porte restée ouverte": "Door left open",
         "Image": "Snapshot",
+        "Fichier image": "Snapshot file",
         "En ligne": "Online",
         "Alarme locale": "Local alarm",
         "Dernier événement": "Last event",
@@ -62,6 +63,8 @@
         "État de la porte": "Door state",
         "Coupure réseau": "Network loss",
         "Redémarrage du portier": "Door station reboot",
+        "Fin d'appel": "Call ended",
+        "Capture impossible": "Snapshot failed",
         "Aucune adresse n'est renseignée pour ce portier.": "No address is set for this door station.",
         "adresse renseignée": "address filled in",
         "rattaché à un objet": "attached to an object",
@@ -78,7 +81,10 @@
         "journal d'appels lu, repère posé au": "call log read, marker set at",
         "sonnerie rattrapée du": "ring recovered from",
         "sans réponse": "unanswered",
-        "sonnerie(s) rattrapée(s) dans le journal du portier": "ring(s) recovered from the device call log"
+        "sonnerie(s) rattrapée(s) dans le journal du portier": "ring(s) recovered from the device call log",
+        "Aucune image pour le moment.": "No picture yet.",
+        "Image introuvable — elle a probablement été effacée par la rotation.": "Picture not found — it was most likely removed by the rotation.",
+        "Ouvrir l'image en grand": "Open the picture full size"
     },
     "plugins/dahuavtobe/core/ajax/dahuavtobe.ajax.php": {
         "401 - Accès non autorisé": "401 - Access denied",
@@ -121,7 +127,7 @@
         "Une ouverture par badge ou par code ne fait pas sonner le portier : sans cette photo, rien dans Jeedom ne dit qui vient d'entrer.": "A card or keypad unlock does not ring the door station: without this picture, nothing in Jeedom says who just came in.",
         "Rattrapage des sonneries": "Ring recovery",
         "Relire le journal toutes les": "Re-read the log every",
-        "Le portier tient le journal de ses appels. Le relire permet de retrouver les sonneries survenues pendant que Jeedom n'écoutait pas — mise à jour, redémarrage, coupure réseau — et sert de filet si le flux d'événements de votre modèle ne portait pas la sonnerie. 0 désactive le rattrapage.": "The door station keeps a log of its calls. Re-reading it recovers rings that happened while Jeedom was not listening — an update, a restart, a network outage — and acts as a safety net if your model's event stream never carried the ring. 0 turns recovery off."
+        "Le portier tient le journal de ses appels. Le relire permet de retrouver les sonneries survenues pendant que Jeedom n'écoutait pas — mise à jour, redémarrage, coupure réseau — et sert de filet si le flux d'événements de votre modèle ne portait pas la sonnerie. La commande « Appels manqués (24 h) » en dépend : c'est cette relecture qui la tient à jour. 0 désactive le rattrapage, et ce compteur reste alors vide.": "The door station keeps a log of its calls. Re-reading it recovers rings that happened while Jeedom was not listening — an update, a restart, a network outage — and acts as a safety net if your model's event stream never carried the ring. The \"Missed calls (24 h)\" command depends on it: this re-reading is what keeps it up to date. 0 turns recovery off, and that counter then stays empty."
     },
     "plugins/dahuavtobe/desktop/php/dahuavtobe.php": {
         "401 - Accès non autorisé": "401 - Access denied",
@@ -198,15 +204,5 @@
         "Tester": "Test",
         "Identifiant interne": "Internal id",
         "fin produite par le plugin": "end produced by the plugin"
-    },
-    "plugins/dahuavtobe/core/template/dashboard/cmd.info.string.dahuavtobe.html": {
-        "Aucune image pour le moment.": "No picture yet.",
-        "Image introuvable — elle a probablement été effacée par la rotation.": "Picture not found — it was most likely removed by the rotation.",
-        "Ouvrir l'image en grand": "Open the picture full size"
-    },
-    "plugins/dahuavtobe/core/template/mobile/cmd.info.string.dahuavtobe.html": {
-        "Aucune image pour le moment.": "No picture yet.",
-        "Image introuvable — elle a probablement été effacée par la rotation.": "Picture not found — it was most likely removed by the rotation.",
-        "Ouvrir l'image en grand": "Open the picture full size"
     }
 }

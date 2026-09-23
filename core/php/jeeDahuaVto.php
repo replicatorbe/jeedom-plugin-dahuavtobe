@@ -134,11 +134,12 @@ foreach ($payload['events'] as $event) {
             $file = isset($event['file']) ? (string) $event['file'] : '';
             /* Le nom vient du démon, mais il compose une URL : même liste
              * blanche que le passe-plat qui servira l'image. */
-            if (preg_match('/^vto\d+_\d{8}-\d{6}_[0-9a-f]{8}\.jpg$/D', $file) !== 1) {
+            if (preg_match(dahuavtobe::SNAPSHOT_PATTERN, $file) !== 1) {
                 log::add('dahuavtobe', 'error', __('Nom de capture refusé :', __FILE__) . ' ' . $file);
                 continue;
             }
             $station->checkAndUpdateCmd('snapshot', dahuavtobe::snapshotUrl($file));
+            $station->checkAndUpdateCmd('snapshot_file', dahuavtobe::snapshotPath($file));
             continue;
         }
 

@@ -42,9 +42,9 @@ $file = init('file');
  * is_string avant tout : init() rend le paramètre tel qu'il arrive, et un
  * « ?file[] » passerait un tableau à preg_match, donc une erreur fatale.
  * Le modificateur D ferme l'autre bout — sans lui, « $ » tolère un saut de
- * ligne final.
+ * ligne final (l'expression, partagée avec jeeDahuaVto.php, vit dans la classe).
  */
-if (!is_string($file) || !preg_match('/^vto(\d+)_\d{8}-\d{6}_[0-9a-f]{8}\.jpg$/D', $file, $m)) {
+if (!is_string($file) || !preg_match(dahuavtobe::SNAPSHOT_PATTERN, $file, $m)) {
     header('HTTP/1.0 400 Bad Request');
     die('400 - Bad Request');
 }

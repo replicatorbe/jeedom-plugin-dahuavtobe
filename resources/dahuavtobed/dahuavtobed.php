@@ -1143,7 +1143,14 @@ class VtoDaemon {
             $first = ($client->failureCount() == 0);
             $connectFailures = $client->noteConnectFailure();
             $delay = $client->scheduleRetry(max(5, (int) $this->config['reconnect_delay']));
-            VtoLog::error($client->name() . ' ' . $error . ' — nouvel essai dans ' . $delay . 's');
+            /* La première panne est une erreur ; les essais suivants, qui
+             * peuvent durer toute une nuit, ne font que la confirmer. */
+            $message = $client->name() . ' ' . $error . ' — nouvel essai dans ' . $delay . 's';
+            if ($first) {
+                VtoLog::error($message);
+            } else {
+                VtoLog::warning($message);
+            }
 
             /*
              * Bascule automatique de transport, dans les deux sens : certains

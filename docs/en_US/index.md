@@ -56,9 +56,35 @@ The **Snapshot** command shows the visitor's picture directly on the dashboard,
 with the time it was taken; a click opens it full size.
 
 Only five commands are visible at first. The others — last call, missed call,
-last access, door left open — exist and are kept up to date, they are simply
-hidden so the dashboard stays readable. One tick box in the Commands tab shows
-any of them.
+last access, door left open, snapshot file — exist and are kept up to date,
+they are simply hidden so the dashboard stays readable. One tick box in the
+Commands tab shows any of them.
+
+The **Snapshot** command holds the address of the latest picture. That address
+is protected: you must be logged in to Jeedom **and** have read access to the
+door station. It therefore shows in the interface, but an outside service
+(Telegram, an e-mail) cannot load it on its own.
+
+To attach the visitor's picture to a notification, use the hidden **Snapshot
+file** command instead: it holds the path of the same picture on the Jeedom
+disk, for example
+`/var/www/html/plugins/dahuavtobe/data/snapshots/vto12_20260923-081500_1a2b3c4d.jpg`.
+Most notification plugins accept a file path as an attachment; the field name
+varies from one to another (`files`, `file`, "File"…).
+
+The picture arrives a moment after the ring, so use the **Snapshot file**
+command itself as the trigger. A scenario triggered by **Doorbell** would go
+out before the picture, with the one from the previous visit.
+
+```
+Trigger: #[Entrance][Door station][Snapshot file]#
+
+[Home][Phone][Send] : message = Someone is at the door,
+                      files = #[Entrance][Door station][Snapshot file]#
+```
+
+This trigger fires on every new picture: a ring, but also a card or keypad
+unlock and a capture requested by hand.
 
 A picture is also taken on every door unlock, card and keypad included: those
 do not ring the door station, and without it nothing would say who just came in.
@@ -75,6 +101,13 @@ minutes by default — the interval is a setting, and 0 turns it off — to reco
 rings that happened during an update, a restart or a network outage. The
 **Missed calls (24 h)** command counts the unanswered rings of the last day;
 that is the one to look at when you get home.
+
+That counter depends on recovery. A missed call announced live bumps it by one
+straight away, but it is the log re-reading that redoes the exact count and
+drops calls older than 24 hours out of the window. With recovery turned off,
+the counter therefore stays **empty** — or frozen on its last value if recovery
+ran before: a figure that only ever went up, never
+forgetting last week's visits, would mislead more than it would help.
 
 This recovery is a safety net, not a real-time path, and it is worth knowing
 why. The device only writes its record when the call **ends**, once the ringing
@@ -97,6 +130,12 @@ The **Open door** command exists but is deliberately restrained: it is created
 invisible, and it refuses to run until the matching box is ticked in the plugin
 configuration. An action command runs just as easily from a stray click as from a
 scenario, and a front door is not a lamp switch.
+
+It also asks for confirmation when run from the interface (dashboard widget,
+mobile app). That only covers clicks: a scenario or an HTTP API call opens the
+door without asking, and only the plugin setting holds them back. You can remove
+the confirmation in the command's advanced configuration (gear icon, "Confirm
+action"); a plugin update will not put it back.
 
 Once enabled, unlocks coming from Jeedom are written to the device's access log
 with the user id set in the configuration, so you can tell them apart from a card

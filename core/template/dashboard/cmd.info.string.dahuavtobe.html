@@ -84,7 +84,7 @@
 
         if (!dahuavtobeSafe(url)) {
           cmd.setAttribute('data-state', 'wait')
-          message.textContent = '{{Aucune image pour le moment.}}'
+          message.textContent = "#vto_no_image#"
           img.removeAttribute('src')
           return
         }
@@ -94,14 +94,14 @@
            prendrait pour une panne du portier. */
         img.onerror = function () {
           cmd.setAttribute('data-state', 'error')
-          message.textContent = '{{Image introuvable — elle a probablement été effacée par la rotation.}}'
+          message.textContent = "#vto_not_found#"
         }
         img.onload = function () {
           cmd.setAttribute('data-state', 'ok')
         }
 
         link.setAttribute('href', url)
-        link.setAttribute('title', '{{Ouvrir l\'image en grand}}')
+        link.setAttribute('title', "#vto_open#")
         img.setAttribute('src', url)
         stamp.textContent = dahuavtobeStamp(url)
 

@@ -155,6 +155,21 @@ verifie('un appel décroché ne compte pas',
 verifie('le futur ne compte pas',
         dahuavtobeCallLog::countMissed(array($journal[4]), $maintenant, 604800), 0);
 
+echo "\n== Appel manqué annoncé en direct ==\n";
+/* L'incrément direct n'est qu'une avance sur le rattrapage : chaque refus
+ * ci-dessous protège contre un chiffre faux, jamais contre un chiffre en
+ * retard — le journal rattrape toujours ce qui a été refusé ici. */
+verifie('rattrapage actif : le compteur avance',
+        dahuavtobeCallLog::liveMissedCounts($maintenant, 0, $maintenant - 600, 15), true);
+verifie('rattrapage désactivé : il ne bouge pas',
+        dahuavtobeCallLog::liveMissedCounts($maintenant, 0, $maintenant - 600, 0), false);
+verifie('la même annonce redite 20 s plus tard ne recompte pas',
+        dahuavtobeCallLog::liveMissedCounts($maintenant + 20, $maintenant, $maintenant - 600, 15), false);
+verifie('un nouvel appel deux minutes après, si',
+        dahuavtobeCallLog::liveMissedCounts($maintenant + 120, $maintenant, $maintenant - 600, 15), true);
+verifie('journal relu après l\'appel : déjà compté',
+        dahuavtobeCallLog::liveMissedCounts($maintenant, 0, $maintenant + 5, 15), false);
+
 /* Le journal réel du portier, passé au même tamis : rien ne doit remonter,
  * la dernière sonnerie datant de plusieurs jours. */
 $reels = array();
@@ -181,6 +196,18 @@ verifie('journal réel : et une seule fois',
  * vient du journal, il n'a pas été choisi. */
 verifie('journal réel : deux sonneries dans la même fenêtre de 24 h',
         dahuavtobeCallLog::countMissed($reels, $aussitotApres), 2);
+
+echo "\n== Sonneries déjà vues en direct ==\n";
+/* Le 17/09, la sonnerie de 17:06:19 a été traitée en direct, puis annoncée
+ * « rattrapée » dix minutes plus tard. C'est ce que ce filtre empêche. */
+verifie('sonnerie vue en direct : pas rattrapée',
+        count(dahuavtobeCallLog::withoutLive(array($dernier), array($dernier['time'] - 3))), 0);
+verifie('horloge du portier en avance d\'une minute : toujours reconnue',
+        count(dahuavtobeCallLog::withoutLive(array($dernier), array($dernier['time'] + 60))), 0);
+verifie('sonnerie vue il y a dix minutes : l\'autre est rattrapée',
+        count(dahuavtobeCallLog::withoutLive(array($dernier), array($dernier['time'] - 600))), 1);
+verifie('rien vu en direct : tout est rattrapé',
+        count(dahuavtobeCallLog::withoutLive(array($dernier), array())), 1);
 
 echo "\n  ==> $ok réussis, $ko échec(s)\n\n";
 exit($ko === 0 ? 0 : 1);

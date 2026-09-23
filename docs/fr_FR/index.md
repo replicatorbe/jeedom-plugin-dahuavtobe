@@ -63,9 +63,9 @@ La commande **Image** affiche directement la photo du visiteur sur le
 dashboard, avec l'heure de la prise de vue ; un clic l'ouvre en grand.
 
 Cinq commandes seulement sont visibles au départ. Les autres — dernier appel,
-appel manqué, dernier accès, porte restée ouverte — existent et sont tenues à
-jour : elles sont simplement masquées pour ne pas noyer le dashboard. Une case à
-cocher dans l'onglet Commandes suffit à en afficher une.
+appel manqué, dernier accès, porte restée ouverte, fichier image — existent et
+sont tenues à jour : elles sont simplement masquées pour ne pas noyer le
+dashboard. Une case à cocher dans l'onglet Commandes suffit à en afficher une.
 
 ## Un scénario de bienvenue
 
@@ -77,11 +77,32 @@ SI [Portier][Sonnerie] == 1 ALORS
 FIN
 ```
 
-Pour joindre la photo du visiteur à une notification, utilisez la commande
-**Image** : elle contient l'adresse de la dernière capture. Attention, cette adresse est protégée : il faut
-être connecté à Jeedom **et** avoir un droit de lecture sur le portier. Elle
-s'affiche donc dans l'interface, mais un service extérieur (Telegram, un
-courriel) ne pourra pas la charger seul.
+La commande **Image** contient l'adresse de la dernière capture. Cette adresse
+est protégée : il faut être connecté à Jeedom **et** avoir un droit de lecture
+sur le portier. Elle s'affiche donc dans l'interface, mais un service extérieur
+(Telegram, un courriel) ne pourra pas la charger seul.
+
+Pour joindre la photo du visiteur à une notification, utilisez plutôt la
+commande masquée **Fichier image** : elle contient le chemin de la même capture
+sur le disque de Jeedom, par exemple
+`/var/www/html/plugins/dahuavtobe/data/snapshots/vto12_20260923-081500_1a2b3c4d.jpg`.
+La plupart des plugins de notification acceptent un chemin de fichier en pièce
+jointe ; le nom du champ varie de l'un à l'autre (`files`, `file`, « Fichier »…).
+
+La photo arrive un instant après la sonnerie : c'est donc la commande
+**Fichier image** elle-même qu'il faut prendre comme déclencheur. Un scénario
+déclenché par **Sonnerie** partirait avant la photo, avec l'image de la visite
+précédente.
+
+```
+Déclencheur : #[Entrée][Portier][Fichier image]#
+
+[Maison][Téléphone][Envoyer] : message = Quelqu'un est à la porte,
+                               files = #[Entrée][Portier][Fichier image]#
+```
+
+Ce déclencheur part à chaque nouvelle photo : sonnerie, mais aussi ouverture
+par badge ou code et capture demandée à la main.
 
 Une photo est également prise à chaque ouverture de la porte, badge ou code
 compris : ces ouvertures-là ne font pas sonner le portier, et sans elle rien ne
@@ -100,6 +121,14 @@ quinze minutes par défaut — c'est réglable, et 0 le désactive — pour retr
 les sonneries survenues pendant une mise à jour, un redémarrage ou une coupure
 réseau. La commande **Appels manqués (24 h)** compte les sonneries restées sans
 réponse sur la dernière journée ; c'est elle qu'on regarde en rentrant.
+
+Ce compteur dépend du rattrapage. Un appel manqué annoncé en direct le fait
+avancer d'un cran sur-le-champ, mais c'est la relecture du journal qui refait
+le compte exact et fait sortir de la fenêtre les appels de plus de 24 heures.
+Rattrapage désactivé, le compteur reste donc **vide** — ou figé sur sa dernière
+valeur s'il a tourné auparavant : un chiffre qui ne ferait
+que monter, sans jamais oublier les visites de la semaine passée, tromperait
+plus qu'il n'aiderait.
 
 Ce rattrapage est un filet, pas un chemin temps réel, et il vaut mieux savoir
 pourquoi. Le portier n'écrit son enregistrement qu'à la **fin** de l'appel,
@@ -123,11 +152,17 @@ La commande **Ouvrir la porte** existe, mais elle est délibérément bridée :
 
 - elle est créée **invisible** sur le dashboard ;
 - elle **refuse de s'exécuter** tant que la case « Autoriser l'ouverture » n'est
-  pas cochée dans la configuration du plugin.
+  pas cochée dans la configuration du plugin ;
+- elle **demande confirmation** avant de s'exécuter depuis l'interface (widget
+  du dashboard, application mobile).
 
-Ce double verrou est volontaire. Une commande d'action Jeedom s'exécute aussi
+Ces verrous sont volontaires. Une commande d'action Jeedom s'exécute aussi
 bien depuis un scénario que depuis un clic, et la porte d'entrée n'est pas un
-interrupteur de lampe. Quand vous l'activez, les ouvertures venant de Jeedom sont
+interrupteur de lampe. La confirmation ne vaut que pour un clic : un scénario ou
+un appel à l'API HTTP ouvrent sans rien demander, seul le réglage du plugin les
+retient. Vous pouvez la retirer dans la configuration avancée de la commande
+(roue dentée, « Confirmer l'action ») : une mise à jour du plugin ne la remettra
+pas. Quand l'ouverture est autorisée, les ouvertures venant de Jeedom sont
 inscrites dans le journal d'accès du portier, avec l'identifiant utilisateur
 indiqué dans la configuration : vous pourrez les distinguer d'un badge ou d'un
 code.

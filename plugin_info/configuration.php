@@ -1,6 +1,14 @@
 <?php
+/*
+ * Chargé d'ordinaire par Jeedom, cœur déjà en place ; mais le fichier reste
+ * joignable en direct, et isConnect() n'y existerait pas : erreur fatale dans
+ * http.error. require_once ne recharge rien dans le cas normal.
+ */
+require_once dirname(__FILE__) . '/../../../core/php/core.inc.php';
+include_file('core', 'authentification', 'php');
 if (!isConnect('admin')) {
-	throw new Exception('{{401 - Accès non autorisé}}');
+	http_response_code(401);
+	die('401 - Unauthorized');
 }
 ?>
 <form class="form-horizontal">
@@ -67,7 +75,7 @@ if (!isConnect('admin')) {
 		<div class="form-group">
 			<label class="col-lg-4 control-label">{{Images conservées}}</label>
 			<div class="col-lg-2">
-				<input class="configKey form-control" data-l1key="snapshot_keep" />
+				<input class="configKey form-control" data-l1key="snapshot_keep" type="number" min="1" />
 			</div>
 			<div class="col-lg-6">
 				<span class="help-block">{{Nombre de photos gardées par portier. Au-delà, les plus anciennes sont effacées.}}</span>
@@ -86,7 +94,7 @@ if (!isConnect('admin')) {
 				</div>
 			</div>
 			<div class="col-lg-6">
-				<span class="help-block">{{Le portier tient le journal de ses appels. Le relire permet de retrouver les sonneries survenues pendant que Jeedom n'écoutait pas — mise à jour, redémarrage, coupure réseau — et sert de filet si le flux d'événements de votre modèle ne portait pas la sonnerie. 0 désactive le rattrapage.}}</span>
+				<span class="help-block">{{Le portier tient le journal de ses appels. Le relire permet de retrouver les sonneries survenues pendant que Jeedom n'écoutait pas — mise à jour, redémarrage, coupure réseau — et sert de filet si le flux d'événements de votre modèle ne portait pas la sonnerie. La commande « Appels manqués (24 h) » en dépend : c'est cette relecture qui la tient à jour. 0 désactive le rattrapage, et ce compteur reste alors vide.}}</span>
 			</div>
 		</div>
 	</fieldset>
