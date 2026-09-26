@@ -3,7 +3,9 @@
 Connexion directe à un portier vidéo Dahua VTO, sans enregistreur intermédiaire.
 Le plugin ouvre une écoute permanente sur le portier et remonte dans Jeedom les
 appels de la sonnette, les fins d'appel sans réponse, les ouvertures de gâche et
-les alarmes de l'appareil. À chaque sonnerie, il photographie le visiteur.
+les alarmes de l'appareil. À chaque sonnerie, il photographie le visiteur et,
+si on le lui demande, fait dire par un modèle de vision s'il s'agit d'un
+livreur, d'un démarcheur, d'un professionnel ou d'un simple visiteur.
 
 Testé sur un **DHI-VTO2211G-WP**, micrologiciel 4.511.0000000.0.R.
 
@@ -20,6 +22,11 @@ illisibles. Une case à cocher suffit à en afficher une.
 | `porte` | info / binaire | État de la gâche | oui |
 | `snapshot` | info / texte | La photo du visiteur, affichée sur le dashboard | oui |
 | `en_ligne` | info / binaire | Liaison d'événements établie | oui |
+| `visiteur_categorie` | info / texte | livreur, demarcheur, professionnel, visiteur, vide, indetermine | oui |
+| `visiteur_description` | info / texte | Une phrase sur le visiteur, ou la raison d'un échec | non |
+| `visiteur_confiance` | info / numérique | Certitude du modèle, en % | non |
+| `visiteur_image` | info / texte | Chemin de la meilleure photo de la visite | non |
+| `visiteur_date` | info / texte | Heure de la sonnerie analysée | non |
 | `dernier_appel` | info / texte | Horodatage du dernier appel | non |
 | `appel_manque` | info / binaire | Appel terminé sans réponse | non |
 | `appels_manques_24h` | info / numérique | Sonneries sans réponse des dernières 24 h | oui |
@@ -28,6 +35,7 @@ illisibles. Une case à cocher suffit à en afficher une.
 | `sabotage` | info / binaire | Alarme locale du portier | non |
 | `dernier_evenement` | info / texte | Le dernier code reçu, brut | non |
 | `capture` | action | Prendre une photo maintenant | oui |
+| `analyser` | action | Analyser la dernière photo, comme une sonnerie | non |
 | `reconnecter` | action | Forcer une reconnexion | non |
 | `ouvrir` | action | Ouvrir la gâche — désactivée par défaut | non |
 

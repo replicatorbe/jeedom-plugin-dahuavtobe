@@ -76,6 +76,7 @@ $eqLogics = eqLogic::byType($plugin->getId());
 		<ul class="nav nav-tabs" role="tablist">
 			<li role="presentation"><a href="#" class="eqLogicAction" aria-controls="home" role="tab" data-toggle="tab" data-action="returnToThumbnailDisplay"><i class="fas fa-arrow-circle-left"></i></a></li>
 			<li role="presentation" class="active"><a href="#eqlogictab" aria-controls="home" role="tab" data-toggle="tab"><i class="fas fa-tachometer-alt"></i><span class="hidden-xs"> {{Équipement}}</span></a></li>
+			<li role="presentation"><a href="#visitortab" aria-controls="home" role="tab" data-toggle="tab"><i class="fas fa-user-tag"></i><span class="hidden-xs"> {{Visiteurs}}</span></a></li>
 			<li role="presentation"><a href="#diagtab" aria-controls="home" role="tab" data-toggle="tab"><i class="fas fa-stethoscope"></i><span class="hidden-xs"> {{Diagnostic}}</span></a></li>
 			<li role="presentation"><a href="#commandtab" aria-controls="home" role="tab" data-toggle="tab"><i class="fas fa-list"></i><span class="hidden-xs"> {{Commandes}}</span></a></li>
 		</ul>
@@ -231,6 +232,62 @@ $eqLogics = eqLogic::byType($plugin->getId());
 									<img id="img_dahuavtobeSnapshot" style="max-width:100%;display:none;border-radius:var(--border-radius);">
 								</div>
 							</div>
+						</fieldset>
+					</form>
+				</div>
+			</div>
+
+			<!-- ========================== VISITEURS ========================== -->
+			<div role="tabpanel" class="tab-pane" id="visitortab">
+				<br>
+				<div class="col-xs-12">
+					<form class="form-horizontal">
+						<fieldset>
+							<legend><i class="fas fa-user-tag"></i> {{Analyse des visiteurs}}</legend>
+							<div class="form-group">
+								<label class="col-sm-3 control-label">{{Analyser les visiteurs}}</label>
+								<div class="col-sm-1">
+									<input type="checkbox" class="eqLogicAttr" data-l1key="configuration" data-l2key="ai_enable">
+								</div>
+								<div class="col-sm-8">
+									<span class="help-block" style="margin:0;">{{À chaque sonnerie, le démon prend quelques photos du visiteur et les fait analyser : livreur, démarcheur, professionnel, visiteur. La commande « Visiteur » reçoit la réponse deux à dix secondes après la sonnerie, et les actions de la catégorie ci-dessous sont jouées. Le service, sa clé et le seuil de confiance se règlent dans la configuration du plugin.}}</span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-3 control-label"></label>
+								<div class="col-sm-9">
+									<a class="btn btn-default btn-sm" id="bt_dahuavtobeAnalyse"><i class="fas fa-search"></i> {{Analyser la dernière photo}}</a>
+									<span class="help-block" style="margin:4px 0 0 0;">{{Exactement comme une sonnerie, sur une seule photo : les commandes sont mises à jour et les actions de la catégorie sont jouées. C'est fait pour tester une notification sans aller sonner à sa porte. Enregistrez d'abord les actions que vous venez de modifier.}}</span>
+									<div id="div_dahuavtobeAnalyse" style="display:none;margin-top:8px;"></div>
+								</div>
+							</div>
+						</fieldset>
+					</form>
+
+					<form class="form-horizontal">
+						<fieldset>
+							<legend><i class="fas fa-bell"></i> {{Actions selon le visiteur}}</legend>
+							<span class="help-block">{{Choisissez pour quels visiteurs vous voulez être prévenu : une catégorie sans action ne fait rien. Les actions partent en arrière-plan, sans retenir la réception des sonneries. Tags utilisables dans les options (titre, message, fichier joint…) : #portier#, #categorie#, #libelle#, #description#, #indices#, #confiance#, #image# (chemin de la meilleure photo, à joindre), #date#, #erreur#, #categorie_brute# (la réponse du modèle avant le seuil). Par prudence, une commande de ce portier ou d'ouverture de serrure est refusée : une analyse d'image n'ouvre jamais une porte.}}</span>
+<?php
+$visitorCategories = array(
+	'livreur'       => array('fas fa-box',              '{{Livreur}}',         '{{Livraison ou courrier : transporteur, colis, facteur.}}'),
+	'demarcheur'    => array('fas fa-clipboard-list',   '{{Démarcheur}}',      '{{Démarchage à domicile : association, vendeur, enquêteur, groupe religieux.}}'),
+	'professionnel' => array('fas fa-tools',            '{{Professionnel}}',   '{{Venu pour un service : technicien, releveur de compteur, artisan, agent.}}'),
+	'visiteur'      => array('fas fa-user',             '{{Visiteur}}',        '{{Une personne sans indice professionnel : famille, amis, voisins.}}'),
+	'vide'          => array('fas fa-user-slash',       '{{Personne en vue}}', '{{Quelqu\'un a sonné, mais aucune photo ne le montre : il se tenait hors du cadre, ou il est déjà reparti.}}'),
+	'indetermine'   => array('fas fa-question-circle', '{{Indéterminé}}',     '{{Le modèle hésite (confiance sous le seuil), ou l\'analyse a échoué — service injoignable, clé refusée, photo impossible. #erreur# dit pourquoi.}}'),
+);
+foreach ($visitorCategories as $category => $info) {
+	echo '<div class="form-group">';
+	echo '<label class="col-sm-2 control-label"><i class="' . $info[0] . '"></i> ' . $info[1] . '</label>';
+	echo '<div class="col-sm-10">';
+	echo '<span class="help-block" style="margin:0 0 6px 0;">' . $info[2] . ' <code>' . $category . '</code></span>';
+	echo '<div class="dahuavtobeActions" data-category="' . $category . '"></div>';
+	echo '<a class="btn btn-default btn-xs bt_dahuavtobeAddAction" data-category="' . $category . '"><i class="fas fa-plus-circle"></i> {{Ajouter une action}}</a>';
+	echo '</div>';
+	echo '</div>';
+}
+?>
 						</fieldset>
 					</form>
 				</div>

@@ -29,6 +29,10 @@ if (php_sapi_name() != 'cli' || isset($_SERVER['REQUEST_METHOD']) || !isset($_SE
 
 pcntl_async_signals(true);
 
+/* Le client d'analyse des visiteurs est partagé avec le plugin : il ne dépend
+ * pas du coeur de Jeedom, que le démon ne charge pas. */
+require_once __DIR__ . '/../../core/class/dahuavtobeVision.class.php';
+
 /* ------------------------------------------------------------------- options */
 $opt = getopt('', array('callback:', 'apikey:', 'pid:', 'socketport:', 'loglevel:'));
 foreach (array('callback', 'pid', 'socketport') as $required) {
@@ -974,6 +978,12 @@ class VtoDaemon {
         if (!isset($config['shot_codes']) || !is_array($config['shot_codes'])) {
             $config['shot_codes'] = array();
         }
+        /* Réglages de l'analyse des visiteurs : absents d'un Jeedom plus ancien
+         * que le démon, ils ne doivent pas faire tomber la configuration. */
+        if (!isset($config['vision']) || !is_array($config['vision'])) {
+            $config['vision'] = array();
+        }
+        $config['vision_images'] = isset($config['vision_images']) ? (int) $config['vision_images'] : 3;
         /* Codes décrivant un état : le démon ne leur fabrique aucune fin. */
         if (!isset($config['hold_codes']) || !is_array($config['hold_codes'])) {
             $config['hold_codes'] = array();
@@ -1213,6 +1223,8 @@ class VtoDaemon {
 
     private function dispatchEvents($_client, $_events) {
         $batch = array();
+        /* Raison de la photo à prendre : 'ring' l'emporte sur 'unlock' quand un
+         * même lot porte les deux, car seule une sonnerie s'analyse. */
         $shot = false;
 
         foreach ($_events as $event) {
@@ -1242,16 +1254,19 @@ class VtoDaemon {
                 unset($this->pulseResets[$key]);
             }
 
-            if ($event['action'] != 'Stop' && $this->isShot($event)) {
-                $shot = true;
+            if ($event['action'] != 'Stop') {
+                $reason = $this->isShot($event);
+                if ($reason !== false && $shot !== 'ring') {
+                    $shot = $reason;
+                }
             }
         }
 
         if (!empty($batch)) {
             $this->push($batch);
         }
-        if ($shot) {
-            $this->maybeSnapshot($_client);
+        if ($shot !== false) {
+            $this->maybeSnapshot($_client, $shot);
         }
     }
 
@@ -1266,20 +1281,23 @@ class VtoDaemon {
      * Une condition qui ne peut pas être évaluée — champ absent — répond non :
      * mieux vaut pas de photo qu'une mauvaise, et l'onglet Diagnostic de Jeedom
      * montrera de toute façon l'événement tel qu'il est arrivé.
+     *
+     * Rend la raison de la photo ('ring', 'unlock'), ou false.
      */
     private function isShot($_event) {
         foreach ($this->config['shot_codes'] as $rule) {
             if (!is_array($rule) || !isset($rule['code']) || $rule['code'] !== $_event['code']) {
                 continue;
             }
+            $reason = isset($rule['reason']) ? (string) $rule['reason'] : 'ring';
             if (!isset($rule['field'])) {
-                return true;
+                return $reason;
             }
             $field = $rule['field'];
             if (!isset($_event['data'][$field]) || !isset($rule['values']) || !is_array($rule['values'])) {
                 return false;
             }
-            return in_array((int) $_event['data'][$field], array_map('intval', $rule['values']), true);
+            return in_array((int) $_event['data'][$field], array_map('intval', $rule['values']), true) ? $reason : false;
         }
         return false;
     }
@@ -1358,7 +1376,7 @@ class VtoDaemon {
      * entre l'appui sur le bouton et le réveil d'un scénario il se passe assez
      * de temps pour que le visiteur ait reculé d'un pas.
      */
-    private function maybeSnapshot($_client) {
+    private function maybeSnapshot($_client, $_reason = 'ring') {
         $id = $_client->id();
         if (isset($this->lastSnapshot[$id]) && time() - $this->lastSnapshot[$id] < self::SNAPSHOT_MIN_INTERVAL) {
             VtoLog::debug($_client->name() . ' capture ignorée (trop rapprochée)');
@@ -1384,6 +1402,7 @@ class VtoDaemon {
 
         // --- processus fils ---
         $this->closeInheritedSockets();
+        $ringAt = time();
         $shot = $this->fetchSnapshot($_client->config);
 
         /*
@@ -1397,13 +1416,75 @@ class VtoDaemon {
             'station_id' => $id,
             'type'       => 'snapshot',
             'ok'         => ($shot !== false),
+            'reason'     => $_reason,
             'time'       => date('Y-m-d H:i:s'),
         );
         if ($shot !== false) {
             $event['file'] = $shot;
         }
         $this->callback('', array('events' => array($event)));
+
+        if ($_reason === 'ring' && !empty($_client->config['ai'])) {
+            $this->analyseVisitor($_client, $shot, $ringAt);
+        }
         exit(0);
+    }
+
+    /* Intervalle entre deux photos d'une même visite. */
+    const VISION_INTERVAL = 2;
+
+    /*
+     * Qui a sonné ? Dans le fils de la capture, après que la première photo est
+     * déjà partie vers Jeedom : la notification simple n'attend pas l'analyse.
+     *
+     * Une seule photo ne suffit pas, et ce n'est pas une précaution de
+     * principe : sur le portier de référence, la personne qui sonne se tient
+     * tout contre l'appareil, hors du cadre ou coupée par son bord. C'est en
+     * reculant qu'elle apparaît, avec son colis ou sa tablette. D'où la
+     * rafale, à deux secondes d'intervalle.
+     *
+     * L'événement 'analysis' part dans tous les cas, échec compris : une
+     * sonnerie doit toujours recevoir une réponse, fût-ce « indéterminé », et
+     * les actions de cette catégorie doivent pouvoir prévenir quand même.
+     */
+    private function analyseVisitor($_client, $_first, $_ringAt) {
+        $images = array();
+        if ($_first !== false) {
+            $images[] = $_first;
+        }
+        $count = isset($this->config['vision_images']) ? max(1, min(4, (int) $this->config['vision_images'])) : 3;
+        /* La première photo compte dans la rafale, qu'elle ait réussi ou non :
+         * le visiteur n'attendra pas une photo de plus parce que le portier
+         * était occupé. */
+        for ($i = 1; $i < $count; $i++) {
+            sleep(self::VISION_INTERVAL);
+            $more = $this->fetchSnapshot($_client->config);
+            if ($more !== false) {
+                $images[] = $more;
+            }
+        }
+
+        $dir = isset($this->config['snapshot_dir']) ? $this->config['snapshot_dir'] : '';
+        if (empty($images)) {
+            $result = dahuavtobeVision::echec('aucune photo n\'a pu être prise');
+        } else {
+            $paths = array();
+            foreach ($images as $name) {
+                $paths[] = $dir . '/' . $name;
+            }
+            $result = dahuavtobeVision::analyse($paths, isset($this->config['vision']) ? $this->config['vision'] : array());
+        }
+        VtoLog::info($_client->name() . ' visiteur : ' . $result['categorie'] . ' ' . $result['confiance'] . ' %'
+                   . ($result['ok'] ? '' : ' (' . $result['erreur'] . ')')
+                   . ' en ' . $result['duree_ms'] . ' ms sur ' . count($images) . ' photo(s)');
+
+        $event = $result;
+        $event['station_id'] = $_client->id();
+        $event['type'] = 'analysis';
+        $event['ring_at'] = $_ringAt;
+        $event['images'] = $images;
+        $event['time'] = date('Y-m-d H:i:s');
+        $this->callback('', array('events' => array($event)));
     }
 
     private function fetchSnapshot($_stationConfig) {

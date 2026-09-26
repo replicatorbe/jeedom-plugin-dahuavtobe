@@ -23,6 +23,10 @@
  *   GET  ?apikey=…&action=config → la configuration, en JSON
  *   POST ?apikey=…  {"events":[…]} → un lot d'événements, répond 'OK'
  *
+ * Un lot porte des événements du portier, et quatre types produits par le
+ * démon : 'status' (liaison), 'door' (relevé de la gâche), 'snapshot'
+ * (photo prise) et 'analysis' (qui a sonné).
+ *
  * L'API du plugin est en mode « localhost » (posée à l'installation) : elle ne
  * répond qu'en boucle locale, et c'est le seul interlocuteur qu'elle ait.
  */
@@ -140,6 +144,17 @@ foreach ($payload['events'] as $event) {
             }
             $station->checkAndUpdateCmd('snapshot', dahuavtobe::snapshotUrl($file));
             $station->checkAndUpdateCmd('snapshot_file', dahuavtobe::snapshotPath($file));
+            continue;
+        }
+
+        /*
+         * Qui a sonné, d'après les photos de la visite. Le démon envoie cet
+         * événement après chaque sonnerie d'un portier où l'analyse est active,
+         * réussite ou échec : une visite doit toujours recevoir une réponse.
+         * Les noms d'images sont vérifiés par applyAnalysis(), comme ci-dessus.
+         */
+        if ($type == 'analysis') {
+            $station->applyAnalysis($event);
             continue;
         }
 

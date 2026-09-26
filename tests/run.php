@@ -16,6 +16,7 @@
  * ne prouverait rien. */
 date_default_timezone_set('Europe/Brussels');
 require_once __DIR__ . '/../core/class/dahuavtobeCallLog.class.php';
+require_once __DIR__ . '/../core/class/dahuavtobeVision.class.php';
 
 $ok = 0;
 $ko = 0;
@@ -208,6 +209,110 @@ verifie('sonnerie vue il y a dix minutes : l\'autre est rattrapée',
         count(dahuavtobeCallLog::withoutLive(array($dernier), array($dernier['time'] - 600))), 1);
 verifie('rien vu en direct : tout est rattrapé',
         count(dahuavtobeCallLog::withoutLive(array($dernier), array())), 1);
+
+
+/* =================================================== ANALYSE DES VISITEURS */
+
+echo "\n== Visiteur : lecture de la réponse ==\n";
+$reponse = function ($_json) {
+    return array('model' => 'm', 'choices' => array(array('message' => array('content' => $_json))));
+};
+$r = dahuavtobeVision::parse($reponse('{"categorie":"livreur","confiance":0.87,"description":"Colis en main","indices":["colis","gilet"],"meilleure_image":2}'), 3);
+verifie('réponse conforme : acceptée', $r['ok'], true);
+verifie('réponse conforme : catégorie', $r['categorie'], 'livreur');
+verifie('confiance ramenée en pourcentage', $r['confiance'], 87);
+verifie('meilleure photo, comptée à partir de 0', $r['meilleure'], 1);
+verifie('indices conservés', implode('|', $r['indices']), 'colis|gilet');
+$r = dahuavtobeVision::parse($reponse('{"categorie":"livreur","confiance":0.9,"description":"","indices":[],"meilleure_image":7}'), 3);
+verifie('meilleure photo hors bornes : la première', $r['meilleure'], 0);
+$r = dahuavtobeVision::parse($reponse('{"categorie":"livreur","confiance":90,"description":"","indices":[],"meilleure_image":1}'), 1);
+verifie('confiance donnée en pourcentage : comprise', $r['confiance'], 90);
+$r = dahuavtobeVision::parse($reponse('{"categorie":"livreur","confiance":4.2,"description":"","indices":[],"meilleure_image":1}'), 1);
+verifie('confiance absurde : plafonnée', $r['confiance'], 4);
+/* Une catégorie hors liste ferait taire tous les scénarios sans rien dire :
+ * elle doit devenir un échec explicite. */
+$r = dahuavtobeVision::parse($reponse('{"categorie":"cambrioleur","confiance":0.9,"description":"","indices":[],"meilleure_image":1}'), 1);
+verifie('catégorie inventée : refusée', $r['ok'], false);
+verifie('catégorie inventée : indéterminé', $r['categorie'], 'indetermine');
+$r = dahuavtobeVision::parse($reponse('C\'est un livreur.'), 1);
+verifie('texte libre : refusé', $r['ok'], false);
+$r = dahuavtobeVision::parse($reponse("```json\n{\"categorie\":\"vide\",\"confiance\":1,\"description\":\"\",\"indices\":[],\"meilleure_image\":1}\n```"), 1);
+verifie('JSON dans une clôture Markdown : accepté', $r['categorie'], 'vide');
+verifie('réponse illisible : indéterminé', dahuavtobeVision::parse('<html>', 1)['categorie'], 'indetermine');
+
+echo "\n== Visiteur : charge envoyée ==\n";
+verifie('modèle récent : max_completion_tokens', dahuavtobeVision::profil('gpt-6-luna')['plafond'], 'max_completion_tokens');
+verifie('modèle récent : sans réflexion', dahuavtobeVision::profil('gpt-6-luna')['reflexion'], 'none');
+verifie('modèle local : paramètres classiques', dahuavtobeVision::profil('qwen2.5vl:7b')['plafond'], 'max_tokens');
+verifie('modèle derrière une passerelle', dahuavtobeVision::profil('openai/gpt-5.4-mini')['plafond'], 'max_completion_tokens');
+$charge = dahuavtobeVision::payload(array('jpeg1', 'jpeg2'), array('model' => 'qwen2.5vl:7b'));
+verifie('deux photos, deux images dans la charge', count(array_filter($charge['messages'][1]['content'],
+        function ($c) { return $c['type'] === 'image_url'; })), 2);
+verifie('température nulle : un tri, pas une rédaction', $charge['temperature'], 0);
+verifie('schéma strict', $charge['response_format']['json_schema']['strict'], true);
+verifie('le schéma liste les six catégories',
+        count($charge['response_format']['json_schema']['schema']['properties']['categorie']['enum']), 6);
+verifie('définition élevée par défaut', $charge['messages'][1]['content'][2]['image_url']['detail'], 'high');
+verifie('indication de l\'occupant reprise dans l\'invite',
+        strpos(dahuavtobeVision::payload(array('x'), array('context' => 'Camionnette en face.'))['messages'][0]['content'],
+               'Camionnette en face.') !== false, true);
+verifie('invite en anglais si Jeedom l\'est',
+        strpos(dahuavtobeVision::prompt(array('language' => 'en_US'), 1), 'en anglais') !== false, true);
+verifie('délai vide : défaut', dahuavtobeVision::delai(''), dahuavtobeVision::TIMEOUT_DEFAUT);
+verifie('délai trop court : relevé', dahuavtobeVision::delai(1), dahuavtobeVision::TIMEOUT_MIN);
+verifie('délai trop long : abaissé', dahuavtobeVision::delai(600), dahuavtobeVision::TIMEOUT_MAX);
+
+echo "\n== Visiteur : échanges avec un faux service ==\n";
+/* Le vrai chemin — fichier, encodage, HTTP, relances, lecture — contre un
+ * serveur local qui joue chaque panne. Aucun appel ne quitte la machine. */
+$image = tempnam(sys_get_temp_dir(), 'vto') . '.jpg';
+$gd = imagecreatetruecolor(160, 120);
+for ($i = 0; $i < 400; $i++) {
+    imagesetpixel($gd, mt_rand(0, 159), mt_rand(0, 119), mt_rand(0, 0xFFFFFF));
+}
+imagejpeg($gd, $image, 90);
+$port = 18000 + mt_rand(0, 999);
+$serveur = proc_open(array(PHP_BINARY, '-S', '127.0.0.1:' . $port, __DIR__ . '/fixtures/fake-openai.php'),
+                     array(1 => array('file', '/dev/null', 'w'), 2 => array('file', '/dev/null', 'w')), $tubes);
+for ($i = 0; $i < 50 && @fsockopen('127.0.0.1', $port) === false; $i++) {
+    usleep(100000);
+}
+@unlink(sys_get_temp_dir() . '/dahuavtobe-fake-panne');
+$essai = function ($_modele, $_images = null, $_timeout = 10) use ($image, $port) {
+    return dahuavtobeVision::analyse($_images === null ? array($image) : $_images, array(
+        'base_url' => 'http://127.0.0.1:' . $port . '/v1/', 'apikey' => 'sk-test', 'model' => $_modele, 'timeout' => $_timeout));
+};
+
+$r = $essai('ok');
+verifie('réponse normale : livreur', $r['categorie'], 'livreur');
+verifie('réponse normale : modèle rapporté', $r['modele'], 'ok-2026');
+$envoye = json_decode(file_get_contents(sys_get_temp_dir() . '/dahuavtobe-fake-derniere.json'), true);
+verifie('la photo part en JPEG base64',
+        strpos($envoye['messages'][1]['content'][2]['image_url']['url'], 'data:image/jpeg;base64,/9j/') === 0, true);
+verifie('un modèle qui refuse max_tokens : corrigé', $essai('refuse-max-tokens')['categorie'], 'livreur');
+verifie('un serveur sans sorties structurées : repli JSON', $essai('sans-schema')['categorie'], 'livreur');
+verifie('une panne passagère : une relance, et ça passe', $essai('panne-puis-ok')['ok'], true);
+$r = $essai('cle-refusee');
+verifie('clé refusée : indéterminé', $r['categorie'], 'indetermine');
+verifie('clé refusée : dit pourquoi', $r['erreur'], 'clé API refusée');
+verifie('modèle inconnu : dit pourquoi', strpos($essai('inexistant')['erreur'], 'modèle ou adresse inconnus') === 0, true);
+verifie('texte libre du modèle : indéterminé', $essai('hors-format')['categorie'], 'indetermine');
+verifie('catégorie inventée par le modèle : indéterminé', $essai('categorie-inconnue')['categorie'], 'indetermine');
+$r = $essai('pourcent');
+verifie('confiance en pourcentage : comprise', $r['confiance'], 85);
+verifie('meilleure photo absurde : la première', $r['meilleure'], 0);
+verifie('refus du modèle : indéterminé', $essai('refus')['erreur'], 'le modèle a refusé l\'analyse : Je ne peux pas aider.');
+verifie('aucune photo lisible : pas d\'appel', $essai('ok', array('/nulle/part.jpg'))['erreur'], 'aucune photo exploitable');
+$r = dahuavtobeVision::analyse(array($image), array('apikey' => ''));
+verifie('pas de clé : pas d\'appel', $r['erreur'], 'aucune clé API n\'est renseignée');
+$debut = microtime(true);
+$r = $essai('lent', null, 5);
+verifie('service trop lent : abandon au délai', $r['erreur'], 'pas de réponse en 5 s');
+verifie('et pas plus tard', (microtime(true) - $debut) < 6.5, true);
+
+proc_terminate($serveur);
+@unlink($image);
+@unlink(sys_get_temp_dir() . '/dahuavtobe-fake-derniere.json');
 
 echo "\n  ==> $ok réussis, $ko échec(s)\n\n";
 exit($ko === 0 ? 0 : 1);

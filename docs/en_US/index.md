@@ -124,6 +124,122 @@ On the very first run the plugin only sets a marker: the device log sometimes
 holds years of calls, all from before the plugin was installed, and announcing
 them as missed rings would make no sense.
 
+## Knowing who rang
+
+The plugin can have a vision model look at the visitor's photos and tell you
+whether it is a delivery person, a door-to-door canvasser or someone you are
+expecting. It is off by default.
+
+### Getting started
+
+1. In the plugin configuration, **Visitor analysis** section, enter an API key.
+   The other settings are fine as they are.
+2. On the equipment, **Visitors** tab, tick **Analyse visitors**.
+3. Under **Actions per visitor**, add an action to each category you want to be
+   told about. A category without an action does nothing.
+4. Save, then click **Analyse the last photo** to check that everything answers.
+
+### What happens on a ring
+
+1. The first photo goes out immediately, as before: the **Snapshot** command and
+   existing scenarios wait for nothing.
+2. The daemon takes two more photos, two seconds apart. Whoever rings often
+   stands right against the door station, out of frame or cut by its edge: they
+   step into view as they move back, with their parcel or tablet.
+3. The photos go to the model, which answers in two to three seconds.
+4. The **Visitor** commands are updated, then the category's actions run in the
+   background.
+
+Allow five to eight seconds between the ring and the answer.
+
+### Categories
+
+| Value | Meaning |
+|---|---|
+| `livreur` | Delivery or mail: carrier, parcel, postman |
+| `demarcheur` | Door-to-door canvassing: charity, salesperson, pollster, religious group |
+| `professionnel` | Service visit: technician, meter reader, tradesman, official |
+| `visiteur` | A person with no professional cue |
+| `vide` | Someone rang, but no photo shows them |
+| `indetermine` | The model is unsure, or the analysis failed |
+
+The **Visitor** command holds these values verbatim, and they are never
+translated: they are what a scenario compares against.
+
+`vide` is common, and it is not a false ring. On a door station filming the
+street through a wide-angle lens, the person ringing often stays to the side,
+out of frame.
+
+`indetermine` covers two cases: an answer below the **confidence threshold**
+(70 % by default), or an analysis that could not run — service unreachable, key
+refused, timeout, no photo taken. In the second case, the **Visitor -
+description** command and the `#erreur#` tag say why. Give this category an
+action if you want to be told even when the service is down.
+
+### Action tags
+
+Usable in every option of an action: title, message, attached file.
+
+| Tag | Content |
+|---|---|
+| `#libelle#` | The readable category: "Livreur", "Démarcheur"… (in the Jeedom language) |
+| `#categorie#` | The raw category: `livreur`, `demarcheur`… |
+| `#description#` | One sentence about the visitor, or why the analysis failed |
+| `#indices#` | What decided the model: "yellow vest, parcel" |
+| `#confiance#` | The model's confidence, in % |
+| `#image#` | Path of the best photo of the visit, to attach |
+| `#date#` | Time of the ring |
+| `#portier#` | Name of the equipment |
+| `#erreur#` | Why the analysis failed, empty otherwise |
+| `#categorie_brute#` | The model's answer before the threshold was applied |
+
+Example, for a delivery person:
+
+```
+[Home][Phone][Send] : title   = #libelle# at the door
+                     message = #description#
+                     files   = #image#
+```
+
+The same information is available to scenarios through the hidden commands
+**Visitor - description**, **Visitor - confidence**, **Visitor - image file**
+and **Visitor - date**. Trigger: the **Visitor** command. It fires on every
+visit, even when two delivery people ring one after the other.
+
+### What the analysis will never do
+
+The model is sometimes wrong. A canvasser could also hold up a sign written to
+fool it. Its answer informs, it never opens anything: a command of this door
+station, or a lock- or gate-opening command, is refused as an action and the log
+says so. A scenario called from an action is not checked: do not put an unlock
+in it.
+
+### Your photos, and your visitors'
+
+These are photos of people, and they leave your network. OpenAI does not use API
+data to train its models, but keeps it for up to thirty days. To keep the photos
+at home, run a local vision model with a compatible API (Ollama, for instance)
+and enter its address in **API address**.
+
+Only rings are analysed. Badge or code entries, and photos taken by hand, never
+leave.
+
+### Tuning the analysis
+
+- **Hint for the model**: what it cannot guess about your street, for instance
+  "A white van is often parked across the road". Without that sentence, a van
+  parked at a neighbour's could pass for a delivery.
+- **Photos per visit**: 3 by default. Each extra photo delays the answer by two
+  seconds.
+- **Confidence threshold**: the higher it is, the more `indetermine` visits, and
+  the fewer wrong categories.
+- **Analyse the last photo** (tab button, or the hidden command of the same
+  name): does exactly what a ring does, on a single photo. Commands are updated
+  **and actions are run**: that is how to test a notification without ringing
+  your own door.
+- The `dahuavtobe` log records every answer, with the category proposed by the
+  model, its confidence and the response time.
+
 ## Opening the door from Jeedom
 
 The **Open door** command exists but is deliberately restrained: it is created
@@ -166,4 +282,6 @@ cleaner.
   you for the credentials — the plugin stores them nowhere but in the device
   configuration.
 - It does not answer or talk to the visitor: that stays with the indoor monitor.
+- It recognises no one. Visitor analysis sorts a visit into a category from
+  clothing and objects; it identifies no face.
 - It is not affiliated with Dahua.

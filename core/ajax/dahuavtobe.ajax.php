@@ -56,6 +56,15 @@ try {
         ajax::success(array('url' => dahuavtobe::snapshotUrl($name) . '&t=' . time()));
     }
 
+    /* Analyse de la dernière photo : met à jour les commandes du visiteur et
+     * joue les actions de sa catégorie, comme une vraie sonnerie. C'est
+     * l'usage voulu — tester la chaîne jusqu'à la notification. */
+    if (init('action') == 'analyse') {
+        unautorizedInDemo();
+        $station = $getStation('id');
+        ajax::success($station->analyseNow());
+    }
+
     if (init('action') == 'daemonStatus') {
         $info = dahuavtobe::deamon_info();
         $answer = dahuavtobe::sendToDaemon(array('order' => 'status'), true);

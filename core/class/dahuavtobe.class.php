@@ -19,6 +19,7 @@ require_once __DIR__ . '/../../../../core/php/core.inc.php';
 /* L'autochargeur de Jeedom ne sait résoudre que la classe portant le nom du
  * plugin : les classes annexes doivent être incluses explicitement. */
 require_once __DIR__ . '/dahuavtobeCallLog.class.php';
+require_once __DIR__ . '/dahuavtobeVision.class.php';
 
 class dahuavtobe extends eqLogic {
 
@@ -154,15 +155,18 @@ class dahuavtobe extends eqLogic {
      */
     public static function shotCodes() {
         $codes = array();
+        /* 'reason' dit au démon POURQUOI il photographie : seule une sonnerie
+         * mérite l'analyse du visiteur. Un habitant qui entre avec son badge
+         * n'a rien à faire chez un service d'analyse d'images. */
         if ((int) config::byKey('snapshot_on_ring', __CLASS__, 1) === 1) {
-            $codes[] = array('code' => 'BackKeyLight', 'field' => 'State', 'values' => array(1, 2));
-            $codes[] = array('code' => 'Invite');
-            $codes[] = array('code' => 'CallNoAnswered');
+            $codes[] = array('code' => 'BackKeyLight', 'field' => 'State', 'values' => array(1, 2), 'reason' => 'ring');
+            $codes[] = array('code' => 'Invite', 'reason' => 'ring');
+            $codes[] = array('code' => 'CallNoAnswered', 'reason' => 'ring');
         }
         /* Une ouverture par badge ou par code ne sonne pas : sans cette capture,
          * rien dans Jeedom ne dit qui vient d'entrer. */
         if ((int) config::byKey('snapshot_on_unlock', __CLASS__, 1) === 1) {
-            $codes[] = array('code' => 'AccessControl');
+            $codes[] = array('code' => 'AccessControl', 'reason' => 'unlock');
         }
         return $codes;
     }
@@ -303,6 +307,10 @@ class dahuavtobe extends eqLogic {
                 'password'  => $eqLogic->getConfiguration('password'),
                 'transport' => $eqLogic->getConfiguration('transport', 'auto'),
                 'channel'   => (int) $eqLogic->getConfiguration('channel', 1),
+                /* Le démon ne fait la rafale de photos et l'analyse que pour les
+                 * portiers qui l'ont demandée, et seulement si une clé existe :
+                 * sans elle, chaque sonnerie coûterait deux photos pour rien. */
+                'ai'        => $eqLogic->visionEnabled(),
             );
         }
 
@@ -316,6 +324,8 @@ class dahuavtobe extends eqLogic {
             'shot_codes'      => self::shotCodes(),
             'hold_codes'      => self::holdCodes(),
             'pulse_duration'  => (int) config::byKey('pulse_duration', __CLASS__, 5),
+            'vision'          => self::visionSettings(),
+            'vision_images'   => self::visionImages(),
         );
     }
 
@@ -371,6 +381,12 @@ class dahuavtobe extends eqLogic {
     public static function postConfig_snapshot_on_ring($_value)   { self::reloadDaemonConfig(); }
     public static function postConfig_snapshot_on_unlock($_value) { self::reloadDaemonConfig(); }
     public static function postConfig_snapshot_keep($_value)      { self::reloadDaemonConfig(); }
+    public static function postConfig_ai_apikey($_value)          { self::reloadDaemonConfig(); }
+    public static function postConfig_ai_base_url($_value)        { self::reloadDaemonConfig(); }
+    public static function postConfig_ai_model($_value)           { self::reloadDaemonConfig(); }
+    public static function postConfig_ai_timeout($_value)         { self::reloadDaemonConfig(); }
+    public static function postConfig_ai_images($_value)          { self::reloadDaemonConfig(); }
+    public static function postConfig_ai_context($_value)         { self::reloadDaemonConfig(); }
 
     /*
      * Le port des ordres, lui, ne se recharge pas : le démon l'a ouvert au
@@ -585,6 +601,262 @@ class dahuavtobe extends eqLogic {
         }
     }
 
+    /* ========================================================== VISITEURS */
+
+    /*
+     * Réglages du service d'analyse, sous la forme qu'attend dahuavtobeVision.
+     * Une seule source pour le démon et pour l'analyse à la main : deux copies
+     * finiraient par ne plus parler au même modèle.
+     */
+    public static function visionSettings() {
+        return array(
+            'base_url' => trim((string) config::byKey('ai_base_url', __CLASS__, dahuavtobeVision::BASE_URL_DEFAUT)),
+            'apikey'   => trim((string) config::byKey('ai_apikey', __CLASS__, '')),
+            'model'    => trim((string) config::byKey('ai_model', __CLASS__, dahuavtobeVision::MODELE_DEFAUT)),
+            'timeout'  => dahuavtobeVision::delai(config::byKey('ai_timeout', __CLASS__, dahuavtobeVision::TIMEOUT_DEFAUT)),
+            'context'  => (string) config::byKey('ai_context', __CLASS__, ''),
+            'language' => (string) config::byKey('language', 'core', 'fr_FR'),
+        );
+    }
+
+    /* Nombre de photos par visite, de 1 à 4. Au-delà, le visiteur a eu le temps
+     * de partir, et la réponse arrive d'autant plus tard. */
+    public static function visionImages() {
+        return max(1, min(4, (int) config::byKey('ai_images', __CLASS__, 3)));
+    }
+
+    public static function visionThreshold() {
+        return max(0, min(100, (int) config::byKey('ai_threshold', __CLASS__, 70)));
+    }
+
+    /* Analyse active pour ce portier : cochée sur l'équipement ET une clé
+     * renseignée. Sans clé, chaque sonnerie finirait en « indéterminé » et
+     * déclencherait les actions de cette catégorie pour une panne de réglage. */
+    public function visionEnabled() {
+        return (int) $this->getConfiguration('ai_enable', 0) === 1
+            && trim((string) config::byKey('ai_apikey', __CLASS__, '')) !== '';
+    }
+
+    /* Libellés lisibles, pour les notifications (#libelle#) et la page. La
+     * commande, elle, garde la clé : c'est elle qu'un scénario compare. */
+    public static function visionLabels() {
+        return array(
+            'livreur'       => __('Livreur', __FILE__),
+            'demarcheur'    => __('Démarcheur', __FILE__),
+            'professionnel' => __('Professionnel', __FILE__),
+            'visiteur'      => __('Visiteur', __FILE__),
+            'vide'          => __('Personne en vue', __FILE__),
+            'indetermine'   => __('Indéterminé', __FILE__),
+        );
+    }
+
+    /*
+     * Applique le résultat d'une analyse, qu'il vienne du démon après une
+     * sonnerie ou d'une analyse demandée à la main.
+     *
+     * $_event : ring_at (horodatage Unix de la sonnerie), images (noms de
+     * fichiers), et le résultat de dahuavtobeVision::analyse().
+     *
+     * Deux gardes, qui tiennent au même repère ring_at :
+     *  - une réponse PLUS ANCIENNE que la dernière appliquée est jetée. Si
+     *    l'analyse d'un premier visiteur traîne et qu'un second sonne, la
+     *    réponse tardive ne doit pas décrire le second ;
+     *  - une réponse DÉJÀ appliquée est jetée. Le démon renvoie un lot quand
+     *    Jeedom tarde à répondre : sans ce contrôle, la même visite
+     *    notifierait deux fois.
+     */
+    public function applyAnalysis($_event) {
+        $ringAt = isset($_event['ring_at']) ? (int) $_event['ring_at'] : time();
+        if ($ringAt <= (int) $this->getCache('ai_done_at', 0)) {
+            log::add(__CLASS__, 'info', $this->getHumanName() . ' '
+                   . __('analyse ignorée : une visite plus récente a déjà été décrite.', __FILE__));
+            return false;
+        }
+        $this->setCache('ai_done_at', $ringAt);
+
+        $categories = dahuavtobeVision::CATEGORIES;
+        $ok = !empty($_event['ok']);
+        $raw = (isset($_event['categorie']) && in_array($_event['categorie'], $categories, true))
+             ? $_event['categorie'] : 'indetermine';
+        $confidence = isset($_event['confiance']) ? max(0, min(100, (int) $_event['confiance'])) : 0;
+        $category = $ok ? $raw : 'indetermine';
+        /* Sous le seuil, le plugin ne tranche pas : une notification « livreur »
+         * pour un démarcheur est pire que « indéterminé ». La réponse brute
+         * reste dans #categorie_brute#, pour qui veut la voir. */
+        if ($ok && $category !== 'indetermine' && $confidence < self::visionThreshold()) {
+            $category = 'indetermine';
+        }
+
+        $error = isset($_event['erreur']) ? (string) $_event['erreur'] : '';
+        $description = isset($_event['description']) ? trim((string) $_event['description']) : '';
+        if (!$ok) {
+            $description = __('Analyse impossible :', __FILE__) . ' ' . $error;
+        }
+        $indices = (isset($_event['indices']) && is_array($_event['indices'])) ? $_event['indices'] : array();
+
+        /* Seuls des noms de captures du plugin sont acceptés : ils composent un
+         * chemin sur le disque, qui part dans une notification. */
+        $images = array();
+        foreach ((isset($_event['images']) && is_array($_event['images'])) ? $_event['images'] : array() as $name) {
+            if (is_string($name) && preg_match(self::SNAPSHOT_PATTERN, $name) === 1) {
+                $images[] = $name;
+            }
+        }
+        $best = isset($_event['meilleure']) ? (int) $_event['meilleure'] : 0;
+        $image = '';
+        if (!empty($images)) {
+            $image = self::snapshotPath(isset($images[$best]) ? $images[$best] : $images[0]);
+        }
+        $date = date('Y-m-d H:i:s', $ringAt);
+
+        $labels = self::visionLabels();
+        log::add(__CLASS__, $ok ? 'info' : 'warning', $this->getHumanName() . ' '
+               . __('visiteur :', __FILE__) . ' ' . $category
+               . ($ok ? ' (' . $raw . ', ' . $confidence . ' %) ' . $description : ' — ' . $error)
+               . (isset($_event['duree_ms']) ? ' [' . (int) $_event['duree_ms'] . ' ms]' : ''));
+
+        /* La catégorie en DERNIER : c'est elle qui déclenche les scénarios, et
+         * ils doivent trouver la description et l'image déjà à jour. */
+        $this->checkAndUpdateCmd('visiteur_confiance', $ok ? $confidence : 0);
+        $this->checkAndUpdateCmd('visiteur_description', $description);
+        $this->checkAndUpdateCmd('visiteur_image', $image);
+        $this->checkAndUpdateCmd('visiteur_date', $date);
+        $this->checkAndUpdateCmd('visiteur_categorie', $category);
+
+        $this->scheduleVisitorActions($category, array(
+            '#portier#'         => $this->getHumanName(),
+            '#categorie#'       => $category,
+            '#libelle#'         => $labels[$category],
+            '#categorie_brute#' => $raw,
+            '#confiance#'       => $ok ? $confidence : 0,
+            '#description#'     => $description,
+            '#indices#'         => implode(', ', $indices),
+            '#image#'           => $image,
+            '#date#'            => $date,
+            '#erreur#'          => $error,
+        ));
+        return true;
+    }
+
+    /*
+     * Analyse de la dernière photo, demandée depuis Jeedom : bouton de la page
+     * ou commande « Analyser la dernière photo ». Elle suit exactement le
+     * chemin d'une sonnerie — commandes et actions comprises — et c'est ce qui
+     * permet de tester une notification sans aller sonner à sa propre porte.
+     */
+    public function analyseNow() {
+        $settings = self::visionSettings();
+        if ($settings['apikey'] === '') {
+            throw new Exception(__('Aucune clé API n\'est renseignée dans la configuration du plugin.', __FILE__));
+        }
+        $cmd = $this->getCmd('info', 'snapshot_file');
+        $path = is_object($cmd) ? (string) $cmd->execCmd() : '';
+        $name = basename($path);
+        if ($path === '' || preg_match(self::SNAPSHOT_PATTERN, $name) !== 1 || !is_file(self::snapshotDir() . '/' . $name)) {
+            throw new Exception(__('Aucune photo à analyser : prenez-en une d\'abord.', __FILE__));
+        }
+        $result = dahuavtobeVision::analyse(array(self::snapshotDir() . '/' . $name), $settings);
+        $result['images'] = array($name);
+        /* L'horloge de Jeedom, à la seconde : une analyse manuelle compte comme
+         * une visite nouvelle. Deux clics dans la même seconde n'en font qu'une. */
+        $result['ring_at'] = max(time(), (int) $this->getCache('ai_done_at', 0) + 1);
+        $this->applyAnalysis($result);
+        $labels = self::visionLabels();
+        $result['libelle'] = $labels[$result['categorie']];
+        $result['seuil'] = self::visionThreshold();
+        return $result;
+    }
+
+    /*
+     * Les actions de la catégorie partent dans un processus PHP détaché, et
+     * jamais dans la requête qui reçoit l'analyse.
+     *
+     * Cette requête est celle du démon, qui abandonne au bout de quatre
+     * secondes et renvoie alors le lot. Une notification qui met cinq secondes
+     * à partir aurait donc été envoyée deux fois — et une action « wait »
+     * aurait gelé la réception des sonneries pendant toute sa durée.
+     */
+    private function scheduleVisitorActions($_category, $_tags) {
+        $all = $this->getConfiguration('ai_actions', array());
+        if (!is_array($all) || empty($all[$_category]) || !is_array($all[$_category])) {
+            return;
+        }
+        $key = __CLASS__ . '::actions::' . $this->getId() . '::' . bin2hex(random_bytes(8));
+        cache::set($key, json_encode(array('id' => (int) $this->getId(), 'category' => $_category, 'tags' => $_tags)), 120);
+        system::php(escapeshellarg(realpath(__DIR__ . '/../php/jeeDahuaVtoActions.php'))
+                  . ' key=' . escapeshellarg($key) . ' >> /dev/null 2>&1 &');
+    }
+
+    /*
+     * Exécute les actions d'une catégorie. Appelée par jeeDahuaVtoActions.php,
+     * dans le processus détaché.
+     *
+     * scenarioExpression::createAndExec est le primitif du coeur pour les
+     * actions configurables : commande, scénario, variable ou message, avec
+     * les options « désactivée » et « en parallèle » du sélecteur.
+     */
+    public function runVisitorActions($_category, $_tags) {
+        $all = $this->getConfiguration('ai_actions', array());
+        if (!is_array($all) || empty($all[$_category]) || !is_array($all[$_category])) {
+            return;
+        }
+        foreach ($all[$_category] as $action) {
+            $expression = isset($action['cmd']) ? trim((string) $action['cmd']) : '';
+            if ($expression === '') {
+                continue;
+            }
+            $refusal = $this->refuseAction($expression);
+            if ($refusal !== '') {
+                log::add(__CLASS__, 'warning', $this->getHumanName() . ' ' . __('action ignorée :', __FILE__)
+                       . ' ' . $expression . ' — ' . $refusal);
+                continue;
+            }
+            $options = (isset($action['options']) && is_array($action['options'])) ? $action['options'] : array();
+            foreach ($options as $key => $value) {
+                if (is_string($value)) {
+                    $options[$key] = str_replace(array_keys($_tags), array_values($_tags), $value);
+                }
+            }
+            /* Transmis tels quels à un scénario appelé, qui les lit en tags. */
+            if (!isset($options['tags']) || $options['tags'] === '') {
+                $options['tags'] = $_tags;
+            }
+            $options['source'] = $this->getHumanName();
+            try {
+                scenarioExpression::createAndExec('action', $expression, $options);
+            } catch (Throwable $e) {
+                /* Une action en échec ne doit pas retenir les suivantes. */
+                log::add(__CLASS__, 'error', $this->getHumanName() . ' ' . __('action en échec :', __FILE__)
+                       . ' ' . $expression . ' — ' . $e->getMessage());
+            }
+        }
+    }
+
+    /*
+     * Ce qu'une analyse d'image ne déclenchera jamais : une commande de ce
+     * portier — « Ouvrir la porte » la première, et « Analyser » qui
+     * bouclerait —, ni une commande d'ouverture de serrure, où qu'elle soit.
+     * Le modèle se trompe, et un démarcheur peut tenir devant l'objectif une
+     * pancarte écrite pour le tromper : sa réponse informe, elle n'ouvre rien.
+     */
+    private function refuseAction($_expression) {
+        $id = str_replace('#', '', cmd::humanReadableToCmd($_expression));
+        if (!is_numeric($id)) {
+            return '';
+        }
+        $cmd = cmd::byId($id);
+        if (!is_object($cmd)) {
+            return '';
+        }
+        if ($cmd->getEqLogic_id() == $this->getId()) {
+            return __('elle vise le portier lui-même.', __FILE__);
+        }
+        if (in_array($cmd->getGeneric_type(), array('LOCK_OPEN', 'GB_OPEN', 'GB_TOGGLE'), true)) {
+            return __('une analyse d\'image n\'ouvre jamais une serrure ni un portail.', __FILE__);
+        }
+        return '';
+    }
+
     /* ========================================================== GÂCHE */
 
     /*
@@ -715,11 +987,11 @@ class dahuavtobe extends eqLogic {
     }
 
     /*
-     * Cinq commandes visibles sur les seize : sonnerie, état de l'appel, porte,
-     * image, en ligne. C'est ce qu'on regarde sur un dashboard.
+     * Peu de commandes visibles : sonnerie, état de l'appel, porte, image,
+     * visiteur, en ligne. C'est ce qu'on regarde sur un dashboard.
      *
      * Les autres existent, sont alimentées et restent disponibles pour les
-     * scénarios — elles sont simplement masquées. Seize tuiles empilées pour une
+     * scénarios — elles sont simplement masquées. Vingt tuiles empilées pour une
      * sonnette rendraient le dashboard illisible, et l'utilisateur n'a qu'une
      * case à cocher pour en rendre une visible s'il la veut.
      */
@@ -765,8 +1037,28 @@ class dahuavtobe extends eqLogic {
         $this->addCmdIfMissing('dernier_evenement_date', __('Date du dernier événement', __FILE__), 'info', 'string',
             array('isVisible' => 0, 'order' => $order++));
 
+        /* Le visiteur, d'après l'analyse de ses photos. La catégorie est la
+         * seule visible : c'est elle qu'on lit d'un coup d'oeil, et elle sert
+         * de déclencheur. Elle et la date se répètent à l'identique — deux
+         * livreurs d'affilée donnent deux fois « livreur », et le second doit
+         * déclencher lui aussi. */
+        $this->addCmdIfMissing('visiteur_categorie', __('Visiteur', __FILE__), 'info', 'string',
+            array('isHistorized' => 1, 'order' => $order++,
+                  'configuration' => array('repeatEventManagement' => 'always')));
+        $this->addCmdIfMissing('visiteur_description', __('Visiteur - description', __FILE__), 'info', 'string',
+            array('isVisible' => 0, 'order' => $order++));
+        $this->addCmdIfMissing('visiteur_confiance', __('Visiteur - confiance', __FILE__), 'info', 'numeric',
+            array('isVisible' => 0, 'order' => $order++, 'unite' => '%'));
+        $this->addCmdIfMissing('visiteur_image', __('Visiteur - fichier image', __FILE__), 'info', 'string',
+            array('isVisible' => 0, 'order' => $order++));
+        $this->addCmdIfMissing('visiteur_date', __('Visiteur - date', __FILE__), 'info', 'string',
+            array('isVisible' => 0, 'order' => $order++,
+                  'configuration' => array('repeatEventManagement' => 'always')));
+
         $this->addCmdIfMissing('capture', __('Prendre une photo', __FILE__), 'action', 'other',
             array('order' => $order++));
+        $this->addCmdIfMissing('analyser', __('Analyser la dernière photo', __FILE__), 'action', 'other',
+            array('isVisible' => 0, 'order' => $order++));
         $this->addCmdIfMissing('reconnecter', __('Reconnecter', __FILE__), 'action', 'other',
             array('isVisible' => 0, 'order' => $order++));
         /* Créée invisible : l'ouverture d'une porte d'entrée ne doit pas être à
@@ -1300,6 +1592,18 @@ class dahuavtobe extends eqLogic {
                 'state'  => $hasObject,
             );
 
+            /* Analyse cochée sans clé : l'équipement la demande, mais le démon
+             * ne la fera jamais, et rien d'autre ne le dirait. */
+            if ((int) $eqLogic->getConfiguration('ai_enable', 0) === 1) {
+                $hasKey = trim((string) config::byKey('ai_apikey', __CLASS__, '')) !== '';
+                $return[] = array(
+                    'test'   => $name . ' — ' . __('analyse des visiteurs', __FILE__),
+                    'result' => $hasKey ? __('OK', __FILE__) : __('NOK', __FILE__),
+                    'advice' => $hasKey ? '' : __('L\'analyse est cochée sur l\'équipement, mais aucune clé API n\'est renseignée dans la configuration du plugin.', __FILE__),
+                    'state'  => $hasKey,
+                );
+            }
+
             /*
              * L'état qui compte vraiment : les événements passent-ils ?
              *
@@ -1338,6 +1642,10 @@ class dahuavtobeCmd extends cmd {
         switch ($this->getLogicalId()) {
             case 'capture':
                 $eqLogic->takeSnapshot();
+                break;
+
+            case 'analyser':
+                $eqLogic->analyseNow();
                 break;
 
             case 'ouvrir':

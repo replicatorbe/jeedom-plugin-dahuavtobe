@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2
+
+**Qui a sonné ?**
+
+- À chaque sonnerie, le plugin peut faire analyser les photos du visiteur par un
+  modèle de vision compatible OpenAI (OpenAI, ou un modèle local comme Ollama).
+  La commande **Visiteur** reçoit la réponse : `livreur`, `demarcheur`,
+  `professionnel`, `visiteur`, `vide` (personne dans le cadre) ou
+  `indetermine`.
+- Une rafale de photos, jusqu'à quatre à deux secondes d'intervalle : la
+  personne qui sonne se tient souvent tout contre le portier, hors du cadre, et
+  c'est en reculant qu'on voit son colis ou sa tablette.
+- Des actions par catégorie, sur l'équipement : on choisit pour quels visiteurs
+  être prévenu. Elles partent en arrière-plan, avec des tags pour le message et
+  la photo à joindre (`#libelle#`, `#description#`, `#image#`…).
+- Sous le seuil de confiance, ou si le service ne répond pas, la visite est
+  classée `indetermine` avec la raison : une sonnerie reçoit toujours une
+  réponse.
+- Une analyse d'image ne peut pas ouvrir la porte : les commandes du portier et
+  d'ouverture de serrure sont refusées comme actions.
+- Désactivée par défaut, et limitée aux sonneries : les ouvertures par badge ou
+  par code ne sont jamais analysées.
+
 ## 0.1
 
 Première version.

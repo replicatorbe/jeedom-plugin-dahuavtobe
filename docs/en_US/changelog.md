@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2
+
+**Who rang?**
+
+- On every ring, the plugin can have the visitor's photos analysed by an
+  OpenAI-compatible vision model (OpenAI, or a local model such as Ollama). The
+  **Visitor** command receives the answer: `livreur` (delivery), `demarcheur`
+  (door-to-door canvasser), `professionnel` (service), `visiteur` (visitor),
+  `vide` (nobody in frame) or `indetermine` (undetermined).
+- A burst of up to four photos, two seconds apart: whoever rings often stands
+  right against the door station, out of frame, and only steps back into view
+  with their parcel or tablet.
+- Actions per category, on the equipment: choose which visitors you want to be
+  told about. They run in the background, with tags for the message and the
+  photo to attach (`#libelle#`, `#description#`, `#image#`…).
+- Below the confidence threshold, or when the service does not answer, the
+  visit is classified `indetermine` with the reason: a ring always gets an
+  answer.
+- An image analysis can never open the door: the door station's own commands
+  and lock-opening commands are refused as actions.
+- Off by default, and limited to rings: badge or code entries are never
+  analysed.
+
 ## 0.1
 
 First release.

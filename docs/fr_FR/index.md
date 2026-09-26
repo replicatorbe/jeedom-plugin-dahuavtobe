@@ -146,6 +146,126 @@ du portier contient parfois des années d'appels, tous antérieurs à
 l'installation, et les annoncer comme des sonneries manquées n'aurait aucun
 sens.
 
+## Savoir qui a sonné
+
+Le plugin peut faire regarder les photos du visiteur par un modèle de vision, et
+vous dire s'il s'agit d'un livreur, d'un démarcheur ou de quelqu'un que vous
+attendez. C'est désactivé par défaut.
+
+### Mise en route
+
+1. Dans la configuration du plugin, section **Analyse des visiteurs**, saisissez
+   une clé API. Les autres réglages conviennent tels quels.
+2. Sur l'équipement, onglet **Visiteurs**, cochez **Analyser les visiteurs**.
+3. Sous **Actions selon le visiteur**, ajoutez une action aux catégories pour
+   lesquelles vous voulez être prévenu. Une catégorie sans action ne fait rien.
+4. Sauvegardez, puis cliquez sur **Analyser la dernière photo** pour vérifier
+   que tout répond.
+
+### Ce qui se passe à la sonnerie
+
+1. La première photo part tout de suite, comme avant : la commande **Image** et
+   les scénarios existants n'attendent rien.
+2. Le démon prend deux photos de plus, à deux secondes d'intervalle. La personne
+   qui sonne se tient souvent tout contre le portier, hors du cadre ou coupée par
+   son bord : c'est en reculant qu'elle apparaît, avec son colis ou sa tablette.
+3. Les photos partent au modèle, qui répond en deux à trois secondes.
+4. Les commandes **Visiteur** sont mises à jour, puis les actions de la catégorie
+   sont jouées, en arrière-plan.
+
+Comptez cinq à huit secondes entre la sonnerie et la réponse.
+
+### Les catégories
+
+| Valeur | Signification |
+|---|---|
+| `livreur` | Livraison ou courrier : transporteur, colis, facteur |
+| `demarcheur` | Démarchage : association, vendeur, enquêteur, groupe religieux |
+| `professionnel` | Venu pour un service : technicien, releveur de compteur, artisan, agent |
+| `visiteur` | Une personne sans indice professionnel |
+| `vide` | Quelqu'un a sonné, mais aucune photo ne le montre |
+| `indetermine` | Le modèle hésite, ou l'analyse a échoué |
+
+La commande **Visiteur** contient ces valeurs telles quelles, en toutes lettres
+et sans traduction : c'est elle qu'on compare dans un scénario.
+
+`vide` est fréquent, et ce n'est pas une fausse sonnerie. Sur un portier qui
+filme la rue en grand-angle, la personne qui sonne reste souvent sur le côté,
+hors du champ.
+
+`indetermine` couvre deux cas : une réponse sous le **seuil de confiance** (70 %
+par défaut), ou une analyse impossible — service injoignable, clé refusée,
+délai dépassé, aucune photo prise. Dans ce second cas, la commande
+**Visiteur - description** et le tag `#erreur#` disent pourquoi. Donnez une
+action à cette catégorie si vous voulez être prévenu même quand le service est
+en panne.
+
+### Les tags des actions
+
+Utilisables dans toutes les options d'une action : titre, message, fichier joint.
+
+| Tag | Contenu |
+|---|---|
+| `#libelle#` | La catégorie en clair : « Livreur », « Démarcheur »… |
+| `#categorie#` | La catégorie brute : `livreur`, `demarcheur`… |
+| `#description#` | Une phrase sur le visiteur, ou la raison de l'échec |
+| `#indices#` | Ce qui a décidé le modèle : « gilet jaune, colis » |
+| `#confiance#` | La certitude du modèle, en % |
+| `#image#` | Le chemin de la meilleure photo de la visite, à joindre |
+| `#date#` | L'heure de la sonnerie |
+| `#portier#` | Le nom de l'équipement |
+| `#erreur#` | La raison d'un échec, vide sinon |
+| `#categorie_brute#` | La réponse du modèle avant l'application du seuil |
+
+Exemple, pour un livreur :
+
+```
+[Maison][Téléphone][Envoyer] : titre   = #libelle# à la porte
+                               message = #description#
+                               files   = #image#
+```
+
+Les mêmes informations restent disponibles pour un scénario, dans les commandes
+masquées **Visiteur - description**, **Visiteur - confiance**, **Visiteur -
+fichier image** et **Visiteur - date**. Déclencheur : la commande **Visiteur**.
+Elle déclenche à chaque visite, même quand deux livreurs se suivent.
+
+### Ce que l'analyse ne fera jamais
+
+Le modèle se trompe parfois. Un démarcheur peut aussi montrer à l'objectif une
+pancarte écrite pour le tromper. Sa réponse informe, elle n'ouvre rien : une
+commande de ce portier, ou une commande d'ouverture de serrure ou de portail,
+est refusée comme action et le journal le signale. Un scénario appelé depuis une
+action n'est pas contrôlé : n'y mettez pas d'ouverture.
+
+### Vos photos, et celles de vos visiteurs
+
+Ce sont des photos de personnes, et elles quittent votre réseau. Chez OpenAI,
+les données envoyées par l'API ne servent pas à entraîner les modèles, mais sont
+conservées jusqu'à trente jours. Pour les garder chez vous, faites tourner un
+modèle de vision local qui expose une API compatible (Ollama, par exemple), et
+indiquez son adresse dans **Adresse de l'API**.
+
+Seules les sonneries sont analysées. Les ouvertures par badge ou par code, et les
+photos prises à la main, ne partent jamais.
+
+### Régler l'analyse
+
+- **Indication pour le modèle** : ce qu'il ne peut pas deviner de votre rue,
+  par exemple « Une camionnette blanche est souvent garée en face ». Sans cette
+  phrase, un utilitaire stationné chez un voisin pouvait passer pour une
+  livraison.
+- **Photos par visite** : 3 par défaut. Chaque photo de plus retarde la réponse
+  de deux secondes.
+- **Seuil de confiance** : plus il est haut, plus il y a de visites
+  `indetermine`, mais moins il y a de fausses catégories.
+- **Analyser la dernière photo** (bouton de l'onglet, ou commande masquée du même
+  nom) : fait exactement ce que fait une sonnerie, sur une seule photo. Les
+  commandes sont mises à jour **et les actions sont jouées** : c'est ce qui permet
+  de tester une notification sans aller sonner.
+- Le journal `dahuavtobe` note chaque réponse, avec la catégorie proposée par le
+  modèle, sa confiance et le temps de réponse.
+
 ## Ouvrir la porte depuis Jeedom
 
 La commande **Ouvrir la porte** existe, mais elle est délibérément bridée :
@@ -196,4 +316,6 @@ de régler l'heure et le fuseau dans l'interface du portier.
   dans la configuration de l'équipement.
 - Il ne décroche pas et ne parle pas au visiteur : cela reste le rôle du moniteur
   intérieur (VTH) ou de l'application.
+- Il ne reconnaît personne. L'analyse des visiteurs range une visite dans une
+  catégorie d'après la tenue et les objets ; elle n'identifie aucun visage.
 - Il n'est pas affilié à Dahua.

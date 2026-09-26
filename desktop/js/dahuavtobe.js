@@ -125,6 +125,148 @@ function dahuavtobeDaemonStatus() {
   })
 }
 
+/* =============================================================== VISITEURS */
+
+function dahuavtobeMarkModified() {
+  jeeFrontEnd.modifyWithoutSave = true
+  window.modifyWithoutSave = true
+}
+
+/* Une ligne d'action, calquée sur le sélecteur d'action des scénarios
+   (desktop/modal/cmd.configure.php), comme dans le plugin dahua. L'ordre
+   html() → setJeeValues → appendChild → replaceWith est celui du coeur : le
+   HTML des options contient des <script> que seul Element.prototype.html()
+   exécute. */
+function dahuavtobeAddAction(_category, _action) {
+  var container = document.querySelector('.dahuavtobeActions[data-category="' + _category + '"]')
+  if (container === null) { return }
+  var action = _action || {}
+  if (!isset(action.options)) { action.options = {} }
+
+  var div = '<div class="dahuavtobeAction expression">'
+  div += '<input class="expressionAttr" data-l1key="type" style="display:none;" value="action">'
+  div += '<div class="form-group">'
+  div += '<div class="col-sm-1">'
+  div += '<input type="checkbox" class="expressionAttr" data-l1key="options" data-l2key="enable" checked title="{{Décocher pour désactiver cette action}}">'
+  div += '<input type="checkbox" class="expressionAttr" data-l1key="options" data-l2key="background" title="{{Exécuter en parallèle des autres actions}}">'
+  div += '</div>'
+  div += '<div class="col-sm-5">'
+  div += '<div class="input-group">'
+  div += '<span class="input-group-btn">'
+  div += '<a class="btn btn-default btn-sm bt_dahuavtobeRemoveAction roundedLeft"><i class="fas fa-minus-circle"></i></a>'
+  div += '</span>'
+  div += '<input class="expressionAttr form-control input-sm cmdAction" data-l1key="cmd">'
+  div += '<span class="input-group-btn">'
+  div += '<a class="btn btn-default btn-sm bt_dahuavtobeListAction" title="{{Choisir un bloc (scénario, variable, message...)}}"><i class="fas fa-tasks"></i></a>'
+  div += '<a class="btn btn-default btn-sm bt_dahuavtobeListCmd roundedRight" title="{{Choisir une commande}}"><i class="fas fa-list-alt"></i></a>'
+  div += '</span>'
+  div += '</div>'
+  div += '</div>'
+  div += '<div class="col-sm-6 actionOptions"></div>'
+  div += '</div>'
+  div += '</div>'
+
+  var wrapper = document.createElement('div')
+  wrapper.html(div)
+  wrapper.setJeeValues(action, '.expressionAttr')
+  container.appendChild(wrapper)
+  var nodes = Array.prototype.slice.call(wrapper.childNodes)
+  wrapper.replaceWith(...nodes)
+  if (nodes.length > 0) {
+    dahuavtobeRefreshActionOptions(nodes[0], init(action.cmd, ''), action.options)
+  }
+}
+
+/* Options rendues en asynchrone : la variante synchrone figerait l'onglet le
+   temps d'un aller-retour PAR action. */
+function dahuavtobeRefreshActionOptions(_line, _expression, _options) {
+  jeedom.cmd.displayActionOption(_expression, _options, function (html) {
+    var target = _line.querySelector('.actionOptions')
+    if (target !== null) {
+      target.html(html)
+      jeedomUtils.taAutosize()
+    }
+  })
+}
+
+/* Affiche le résultat d'une analyse demandée à la main. */
+function dahuavtobeShowAnalysis(_result) {
+  var box = dahuavtobeEl('div_dahuavtobeAnalyse')
+  if (box === null) { return }
+  var html
+  if (_result.ok) {
+    var below = (_result.categorie !== 'indetermine' && _result.confiance < _result.seuil)
+    html = '<b>' + dahuavtobeEscape(_result.libelle) + '</b> — ' + dahuavtobeEscape(_result.confiance) + ' %'
+    if (below) {
+      html += ' <span class="label label-warning">{{sous le seuil de}} ' + dahuavtobeEscape(_result.seuil)
+            + ' % : {{la visite sera classée « indéterminé »}}</span>'
+    }
+    html += '<br>' + dahuavtobeEscape(_result.description)
+    if (_result.indices && _result.indices.length > 0) {
+      html += '<br><small>{{Indices}} : ' + dahuavtobeEscape(_result.indices.join(', ')) + '</small>'
+    }
+    html += '<br><small>' + dahuavtobeEscape(_result.modele) + ' — ' + dahuavtobeEscape(_result.duree_ms) + ' ms</small>'
+  } else {
+    html = '<b>{{Analyse impossible}}</b> : ' + dahuavtobeEscape(_result.erreur)
+  }
+  box.className = 'alert ' + (_result.ok ? 'alert-info' : 'alert-danger')
+  box.innerHTML = html
+  box.style.display = ''
+}
+
+function dahuavtobeAnalyse() {
+  var id = dahuavtobeCurrentId()
+  if (id === '') {
+    jeedomUtils.showAlert({ message: '{{Enregistrez le portier avant de lancer une analyse.}}', level: 'warning' })
+    return
+  }
+  var box = dahuavtobeEl('div_dahuavtobeAnalyse')
+  if (box !== null) {
+    box.className = 'alert alert-info'
+    box.textContent = '{{Analyse en cours…}}'
+    box.style.display = ''
+  }
+  dahuavtobeAjax('analyse', { id: id }, function (result) {
+    dahuavtobeShowAnalysis(result.result)
+  })
+}
+
+/* Appelée par plugin.template.js juste avant l'enregistrement. Les actions sont
+   des listes rangées par catégorie : elles ne tiennent pas dans data-lXkey, et
+   sont donc collectées à la main. */
+function saveEqLogic(_eqLogic) {
+  if (!isset(_eqLogic.configuration)) {
+    _eqLogic.configuration = {}
+  }
+  var actions = {}
+  document.querySelectorAll('.dahuavtobeActions').forEach(function (container) {
+    actions[container.getAttribute('data-category')] =
+      container.querySelectorAll('.dahuavtobeAction').getJeeValues('.expressionAttr')
+  })
+  _eqLogic.configuration.ai_actions = actions
+  return _eqLogic
+}
+
+/* Le coeur ne réinitialise que les .eqLogicAttr : les actions du portier
+   précédent resteraient affichées, et seraient enregistrées sur celui-ci. */
+function dahuavtobePrintActions(_eqLogic) {
+  var configuration = (isset(_eqLogic) && isset(_eqLogic.configuration)) ? _eqLogic.configuration : {}
+  var all = (isset(configuration.ai_actions) && typeof configuration.ai_actions === 'object') ? configuration.ai_actions : {}
+  document.querySelectorAll('.dahuavtobeActions').forEach(function (container) {
+    container.innerHTML = ''
+    var category = container.getAttribute('data-category')
+    var list = Array.isArray(all[category]) ? all[category] : []
+    for (var i = 0; i < list.length; i++) {
+      dahuavtobeAddAction(category, list[i])
+    }
+  })
+  var box = dahuavtobeEl('div_dahuavtobeAnalyse')
+  if (box !== null) {
+    box.style.display = 'none'
+    box.innerHTML = ''
+  }
+}
+
 /* ============================================================== DIAGNOSTIC */
 
 /* Rafraîchissement du journal brut. Il tourne tant que l'onglet Diagnostic est
@@ -202,6 +344,7 @@ function printEqLogic(_eqLogic) {
   }
   dahuavtobeStatus('', null)
   dahuavtobeRawStop()
+  dahuavtobePrintActions(_eqLogic)
 }
 
 /* ============================================================== COMMANDES */
@@ -281,6 +424,61 @@ dahuavtobeContainer.addEventListener('click', function (_event) {
     dahuavtobeDaemonStatus()
     return
   }
+  if (target.closest('#bt_dahuavtobeAnalyse') !== null) {
+    _event.preventDefault()
+    dahuavtobeAnalyse()
+    return
+  }
+
+  /* --- Actions selon le visiteur --- */
+  var button = target.closest('.bt_dahuavtobeAddAction')
+  if (button !== null) {
+    _event.preventDefault()
+    dahuavtobeAddAction(button.getAttribute('data-category'), {})
+    dahuavtobeMarkModified()
+    return
+  }
+  button = target.closest('.bt_dahuavtobeRemoveAction')
+  if (button !== null) {
+    _event.preventDefault()
+    button.closest('.dahuavtobeAction').remove()
+    dahuavtobeMarkModified()
+    return
+  }
+  button = target.closest('.bt_dahuavtobeListCmd')
+  if (button !== null) {
+    _event.preventDefault()
+    var cmdLine = button.closest('.dahuavtobeAction')
+    jeedom.cmd.getSelectModal({ cmd: { type: 'action' } }, function (result) {
+      cmdLine.querySelector('.expressionAttr[data-l1key="cmd"]').jeeValue(result.human)
+      dahuavtobeRefreshActionOptions(cmdLine, result.human, '')
+      dahuavtobeMarkModified()
+    })
+    return
+  }
+  button = target.closest('.bt_dahuavtobeListAction')
+  if (button !== null) {
+    _event.preventDefault()
+    var blockLine = button.closest('.dahuavtobeAction')
+    jeedom.getSelectActionModal({}, function (result) {
+      /* Ces blocs n'ont de sens que dans un scénario. Les actions tournent dans
+         leur propre processus, un « wait » ne bloquerait rien, mais il n'y a
+         ni scénario à arrêter ni valeur à rendre. */
+      var refuses = ['stop', 'scenario_return', 'icon', 'tag']
+      if (refuses.indexOf(result.human) !== -1) {
+        jeedomUtils.showAlert({
+          message: '{{Ce bloc n\'a de sens que dans un scénario. Passez par un scénario appelé depuis cette action.}}',
+          level: 'warning',
+          timeOut: 10000
+        })
+        return
+      }
+      blockLine.querySelector('.expressionAttr[data-l1key="cmd"]').jeeValue(result.human)
+      dahuavtobeRefreshActionOptions(blockLine, result.human, '')
+      dahuavtobeMarkModified()
+    })
+    return
+  }
 
   /* Le journal brut ne se remplit que quand on le regarde. */
   var tab = target.closest('a[href="#diagtab"]')
@@ -292,4 +490,21 @@ dahuavtobeContainer.addEventListener('click', function (_event) {
    || target.closest('.eqLogicAction[data-action="returnToThumbnailDisplay"]') !== null) {
     dahuavtobeRawStop()
   }
+})
+
+/* Le coeur n'arme modifyWithoutSave que sur ses propres champs : sans cela, on
+   quitte la page en perdant ses actions sans le moindre avertissement. */
+dahuavtobeContainer.addEventListener('change', function (_event) {
+  if (_event.target !== null && _event.target.closest('.dahuavtobeAction') !== null) {
+    dahuavtobeMarkModified()
+  }
+})
+
+/* Réaffiche les options quand la commande d'une action est saisie à la main. */
+dahuavtobeContainer.addEventListener('focusout', function (_event) {
+  var input = (_event.target !== null) ? _event.target.closest('.dahuavtobeAction .cmdAction') : null
+  if (input === null) { return }
+  var line = input.closest('.dahuavtobeAction')
+  var current = line.getJeeValues('.expressionAttr')[0]
+  dahuavtobeRefreshActionOptions(line, input.jeeValue(), init(current.options))
 })
