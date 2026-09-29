@@ -877,8 +877,29 @@ class dahuavtobe extends eqLogic {
         $userId  = config::byKey('open_door_userid', __CLASS__, 101);
         $detail  = null;
 
-        $result = self::cgiRequest($this, 'accessControl.cgi?action=openDoor&channel=' . $channel
-                                 . '&UserID=' . rawurlencode($userId) . '&Type=Remote', false, 10, $detail);
+        /*
+         * Deux formes de la même requête. La complète signe l'ouverture
+         * (UserID, Type=Remote) : c'est elle qui fait apparaître Jeedom dans le
+         * « Dernier accès ». Mais certains firmwares la rejettent en HTTP 400 —
+         * c'est le cas d'un VTO2211G en 4.511 de 2022 — et n'acceptent que la
+         * forme nue. On retient alors, par portier, que la forme nue est la
+         * bonne : une ouverture de porte ne doit pas payer à chaque fois un
+         * aller-retour voué à l'échec.
+         */
+        $simple = 'accessControl.cgi?action=openDoor&channel=' . $channel;
+        $full   = $simple . '&UserID=' . rawurlencode($userId) . '&Type=Remote';
+        $plain  = ((int) $this->getConfiguration('open_door_plain', 0) === 1);
+
+        $result = self::cgiRequest($this, $plain ? $simple : $full, false, 10, $detail);
+        if ($result === false && !$plain && isset($detail['code']) && (int) $detail['code'] === 400) {
+            $result = self::cgiRequest($this, $simple, false, 10, $detail);
+            if ($result !== false) {
+                $this->setConfiguration('open_door_plain', 1);
+                $this->save(true);
+                log::add(__CLASS__, 'info', $this->getHumanName() . ' '
+                       . __('refuse l\'ouverture signée (HTTP 400) : forme simple retenue pour la suite', __FILE__));
+            }
+        }
         if ($result === false) {
             throw new Exception(__('L\'ouverture de la porte a échoué.', __FILE__) . ' '
                               . self::describeCgiFailure($detail));
