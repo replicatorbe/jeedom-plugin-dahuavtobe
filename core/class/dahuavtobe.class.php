@@ -1009,8 +1009,13 @@ class dahuavtobe extends eqLogic {
         $this->addCmdIfMissing('appels_manques_24h', __('Appels manqués (24 h)', __FILE__), 'info', 'numeric',
             array('isHistorized' => 1, 'order' => $order++));
 
+        /* « Porte » vaut 1 quand la porte est ouverte (Status « Open »). Pas de
+         * LOCK_STATE : ce type attend 1 = verrouillé, l'inverse exact, et
+         * Google Home comme les applications mobiles l'auraient lu à rebours.
+         * Aucun type du cœur ne dit « 1 = ouvert » pour une porte : un type
+         * neutre plutôt qu'un type faux. */
         $this->addCmdIfMissing('porte', __('Porte', __FILE__), 'info', 'binary',
-            array('generic_type' => 'LOCK_STATE', 'isHistorized' => 1, 'order' => $order++));
+            array('generic_type' => 'GENERIC_INFO', 'isHistorized' => 1, 'order' => $order++));
         $this->addCmdIfMissing('dernier_acces', __('Dernier accès', __FILE__), 'info', 'string',
             array('isVisible' => 0, 'order' => $order++));
         $this->addCmdIfMissing('porte_non_fermee', __('Porte restée ouverte', __FILE__), 'info', 'binary',

@@ -53,6 +53,7 @@ function dahuavtobe_update() {
         }
         dahuavtobe_migrateSnapshotWidget();
         dahuavtobe_migrateOpenDoorConfirm();
+        dahuavtobe_migrateDoorGenericType();
     } catch (Throwable $e) {
         log::add('dahuavtobe', 'error', __('Mise à jour du plugin :', __FILE__) . ' ' . $e->getMessage());
     }
@@ -107,6 +108,25 @@ function dahuavtobe_migrateOpenDoorConfirm() {
         }
     }
     config::save('migration::open_door_confirm', 1, 'dahuavtobe');
+}
+
+/*
+ * « Porte » perd le type LOCK_STATE, qui disait l'inverse de sa valeur (voir
+ * createCommands). Seul un LOCK_STATE resté tel quel est touché : un type
+ * choisi à la main par l'utilisateur est le sien.
+ */
+function dahuavtobe_migrateDoorGenericType() {
+    if (config::byKey('migration::door_generic_type', 'dahuavtobe', 0) == 1) {
+        return;
+    }
+    foreach (dahuavtobe::byType('dahuavtobe') as $eqLogic) {
+        $door = cmd::byEqLogicIdAndLogicalId($eqLogic->getId(), 'porte');
+        if (is_object($door) && $door->getGeneric_type() == 'LOCK_STATE') {
+            $door->setGeneric_type('GENERIC_INFO');
+            $door->save();
+        }
+    }
+    config::save('migration::door_generic_type', 1, 'dahuavtobe');
 }
 
 /*

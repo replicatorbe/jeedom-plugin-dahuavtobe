@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- **Porte** perd le type générique LOCK_STATE, qui attend 1 = verrouillé alors
+  que la commande vaut 1 quand la porte est ouverte : Google Home et les
+  applications mobiles la lisaient à l'envers. Elle passe en information
+  générique ; sa valeur ne change pas.
+
 ## 0.2
 
 **Qui a sonné ?**
