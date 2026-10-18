@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2
+
+- Les champs **Password** et **CardNo** des événements de contrôle d'accès sont
+  masqués (`***`) dès leur réception par le démon : un code tapé au clavier du
+  portier ne finit plus en clair dans le journal, ni dans l'onglet Diagnostic.
+  Le plugin ne s'en servait pas ; **Dernier accès** se lit toujours dans
+  Method et UserID.
+
 ## 0.2.1
 
 - **Porte** perd le type générique LOCK_STATE, qui attend 1 = verrouillé alors

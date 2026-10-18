@@ -98,6 +98,15 @@ abstract class VtoTransport {
         'VideoMotionInfo', 'MDResult', 'SystemState', 'NewFile', 'UpdateFile',
     );
 
+    /*
+     * Champs secrets d'AccessControl : le code tapé au clavier (Method 2) et
+     * le numéro de badge. Le plugin ne s'en sert nulle part — qui a ouvert se
+     * lit dans Method et UserID — mais l'événement brut part au journal, à
+     * Jeedom et à la mémoire de diagnostic : le premier code essayé finirait
+     * en clair dans les trois.
+     */
+    const SECRET_FIELDS = array('Password', 'CardNo');
+
     const MAX_BUFFER = 4194304;      // 4 Mo : au-delà, le flux est corrompu
 
     /*
@@ -236,6 +245,7 @@ abstract class VtoTransport {
         if (!is_array($_data)) {
             $_data = array();
         }
+        $_data = self::maskSecrets($_data);
         $time = time();
         if (isset($_data['UTC']) && is_numeric($_data['UTC'])) {
             $utc = (int) $_data['UTC'];
@@ -254,6 +264,23 @@ abstract class VtoTransport {
             'data'       => $_data,
             'time'       => date('Y-m-d H:i:s', $time),
         );
+    }
+
+    /*
+     * Masque les champs secrets, à la source : c'est le seul endroit par où
+     * passe chaque événement, avant le journal, l'envoi à Jeedom et la mémoire
+     * de diagnostic. Un champ vide reste vide — savoir qu'aucun code n'a été
+     * tapé est une information de réglage, pas un secret.
+     */
+    public static function maskSecrets($_data) {
+        foreach ($_data as $key => $value) {
+            if (is_array($value)) {
+                $_data[$key] = self::maskSecrets($value);
+            } elseif (in_array((string) $key, self::SECRET_FIELDS, true) && $value !== '' && $value !== null) {
+                $_data[$key] = '***';
+            }
+        }
+        return $_data;
     }
 
     protected function isBlacklisted($_code) {
