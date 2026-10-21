@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.4
+
+- Arrêt propre du démon : il reçoit SIGTERM et dispose de dix secondes pour
+  fermer sa session avec le portier avant un kill -9, et le redémarrage attend
+  que le port d'ordres soit libéré. Un redémarrage pouvait échouer sur
+  « Address already in use ».
+- Les captures sont écrites dans un fichier temporaire puis renommées : le
+  widget, une notification ou l'analyse du visiteur ne lisent plus jamais un
+  JPEG à moitié écrit.
+
 ## 0.2.3
 
 - Le point d'entrée appelé par le démon n'accepte plus que la clé API du

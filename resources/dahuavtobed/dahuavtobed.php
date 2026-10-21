@@ -1551,13 +1551,32 @@ class VtoDaemon {
         }
         $name = 'vto' . (int) $_stationConfig['id'] . '_' . gmdate('Ymd-His')
               . '_' . bin2hex(random_bytes(4)) . '.jpg';
-        if (@file_put_contents($dir . '/' . $name, $image) === false) {
+        if (!$this->writeFileAtomic($dir . '/' . $name, $image)) {
             VtoLog::error('écriture de la capture impossible : ' . $dir . '/' . $name);
             return false;
         }
         $this->purgeSnapshots($dir, (int) $_stationConfig['id']);
         VtoLog::info('capture enregistrée : ' . $name);
         return $name;
+    }
+
+    /*
+     * Écriture atomique : fichier temporaire dans le même dossier, puis rename.
+     * Jeedom publie l'image dès le retour, et la vision l'envoie au modèle :
+     * ni l'un ni l'autre ne doit lire un JPEG tronqué. Le nom temporaire finit
+     * en .tmp, hors du motif vto<id>_*.jpg de la purge et de snapshot.php.
+     */
+    private function writeFileAtomic($_path, $_data) {
+        $tmp = $_path . '.' . getmypid() . '.tmp';
+        if (@file_put_contents($tmp, $_data) !== strlen($_data)) {
+            @unlink($tmp);
+            return false;
+        }
+        if (!@rename($tmp, $_path)) {
+            @unlink($tmp);
+            return false;
+        }
+        return true;
     }
 
     private function purgeSnapshots($_dir, $_stationId) {
