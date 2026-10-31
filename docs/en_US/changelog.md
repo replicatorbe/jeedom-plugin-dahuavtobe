@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.5
+
+- **Alerts** command with its **Activer les alertes** / **Couper les alertes**
+  actions: while alerts are off, the plugin no longer analyses visitors nor
+  runs their actions, but keeps Ring, missed calls and the photo up to date.
+  Scenarios test `Alerts == 1` to stay quiet as well.
+- Alerts left off are switched back on after 72 h (set in the plugin
+  configuration, 0 = never).
+
 ## 0.2.3
 
 - The endpoint called by the daemon now only accepts the plugin's API key:

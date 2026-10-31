@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.5
+
+- Commande **Alertes** et ses deux actions **Activer les alertes** / **Couper
+  les alertes** : coupées, le plugin n'analyse plus les visiteurs et n'exécute
+  plus leurs actions, mais continue de tenir Sonnerie, les appels manqués et la
+  photo à jour. Les scénarios testent `Alertes == 1` pour se taire aussi.
+- Une coupure oubliée prend fin seule après 72 h (réglable dans la
+  configuration du plugin, 0 = jamais).
+
 ## 0.2.4
 
 - Arrêt propre du démon : il reçoit SIGTERM et dispose de dix secondes pour

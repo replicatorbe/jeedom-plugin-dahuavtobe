@@ -67,6 +67,24 @@ appel manqué, dernier accès, porte restée ouverte, fichier image — existent
 sont tenues à jour : elles sont simplement masquées pour ne pas noyer le
 dashboard. Une case à cocher dans l'onglet Commandes suffit à en afficher une.
 
+## Couper les alertes
+
+**Couper les alertes** fait taire la sonnette dans Jeedom, pour une sieste ou
+une soirée où l'on ne veut pas être dérangé ; **Activer les alertes** la
+rétablit. L'information **Alertes** vaut 1 quand elles sont actives.
+
+Coupées, le plugin n'analyse plus les visiteurs et n'exécute plus leurs
+actions. Il continue en revanche de tenir **Sonnerie**, les appels manqués et
+la photo à jour : l'historique dit toujours qui est passé. Vos scénarios, eux,
+ne savent rien de l'interrupteur tant que vous ne le leur dites pas : ajoutez
+`#[…][Portier][Alertes]# == 1` à leur condition.
+
+Les alertes coupées reviennent seules au bout de 72 h, délai réglable dans la
+configuration du plugin (0 = jamais) : sans cela, une coupure oubliée ferait
+manquer chaque visiteur sans que rien ne le signale. Le délai part de la
+coupure ; couper une seconde fois ne le relance pas. Le carillon du portier et
+le moniteur intérieur, eux, sonnent toujours : ils ne dépendent pas de Jeedom.
+
 ## Un scénario de bienvenue
 
 Déclencheur : la commande **Sonnerie** passe à 1.

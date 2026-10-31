@@ -53,6 +53,19 @@ if (!isConnect('admin')) {
 	</fieldset>
 
 	<fieldset>
+		<legend><i class="fas fa-bell-slash"></i> {{Alertes}}</legend>
+		<div class="form-group">
+			<label class="col-lg-4 control-label">{{Réactivation automatique (h)}}</label>
+			<div class="col-lg-2">
+				<input class="configKey form-control" data-l1key="alerts_resume_hours" type="number" min="0" />
+			</div>
+			<div class="col-lg-6">
+				<span class="help-block">{{Les alertes coupées par « Couper les alertes » reviennent d'elles-mêmes après ce délai. 0 : jamais. Une coupure oubliée ferait manquer chaque visiteur sans que rien ne le signale.}}</span>
+			</div>
+		</div>
+	</fieldset>
+
+	<fieldset>
 		<legend><i class="fas fa-camera"></i> {{Captures}}</legend>
 		<div class="form-group">
 			<label class="col-lg-4 control-label">{{Photographier à la sonnerie}}</label>

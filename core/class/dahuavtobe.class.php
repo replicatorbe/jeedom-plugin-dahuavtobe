@@ -356,8 +356,10 @@ class dahuavtobe extends eqLogic {
                 'channel'   => (int) $eqLogic->getConfiguration('channel', 1),
                 /* Le démon ne fait la rafale de photos et l'analyse que pour les
                  * portiers qui l'ont demandée, et seulement si une clé existe :
-                 * sans elle, chaque sonnerie coûterait deux photos pour rien. */
-                'ai'        => $eqLogic->visionEnabled(),
+                 * sans elle, chaque sonnerie coûterait deux photos pour rien.
+                 * Alertes coupées, l'analyse ne servirait à personne : le démon
+                 * ne prend alors que la photo de la sonnerie. */
+                'ai'        => $eqLogic->visionEnabled() && $eqLogic->alertsEnabled(),
             );
         }
 
@@ -864,6 +866,13 @@ class dahuavtobe extends eqLogic {
      * les options « désactivée » et « en parallèle » du sélecteur.
      */
     public function runVisitorActions($_category, $_tags) {
+        /* Relu au moment d'agir : une analyse partie avant la coupure, ou une
+         * analyse demandée à la main, ne doit prévenir personne non plus. */
+        if (!$this->alertsEnabled()) {
+            log::add(__CLASS__, 'info', $this->getHumanName() . ' '
+                   . __('alertes coupées : actions du visiteur ignorées.', __FILE__));
+            return;
+        }
         $all = $this->getConfiguration('ai_actions', array());
         if (!is_array($all) || empty($all[$_category]) || !is_array($all[$_category])) {
             return;
@@ -977,6 +986,55 @@ class dahuavtobe extends eqLogic {
         return true;
     }
 
+    /* ========================================================== ALERTES */
+
+    /*
+     * L'interrupteur « Alertes » coupe ce que la sonnette déclenche, pas ce
+     * qu'elle enregistre : Sonnerie, appels manqués et photo continuent d'être
+     * mis à jour, et l'historique dit toujours qui est passé. Le plugin y
+     * renonce à ses propres actions (celles du visiteur) et à l'analyse ; les
+     * scénarios de l'utilisateur, eux, testent la commande dans leur condition.
+     *
+     * Une commande absente ou sans valeur compte comme active : un portier
+     * qui se tairait à cause d'une migration ratée serait la pire des pannes.
+     */
+    public function alertsEnabled() {
+        $cmd = $this->getCmd('info', 'alertes');
+        return !is_object($cmd) || (string) $cmd->execCmd() !== '0';
+    }
+
+    public function setAlerts($_enabled) {
+        $value = $_enabled ? 1 : 0;
+        if ($this->alertsEnabled() === (bool) $value) {
+            return;
+        }
+        $this->checkAndUpdateCmd('alertes', $value);
+        log::add(__CLASS__, 'info', $this->getHumanName() . ' '
+               . ($value ? __('alertes réactivées.', __FILE__) : __('alertes coupées.', __FILE__)));
+        /* Le démon décide seul de l'analyse : il doit l'apprendre tout de suite. */
+        self::reloadDaemonConfig();
+    }
+
+    /*
+     * Une coupure oubliée ne doit pas durer : au bout du délai réglé, les
+     * alertes reviennent d'elles-mêmes. Le délai part de la date de valeur de
+     * la commande, qui survit à un redémarrage — au contraire du cache — et
+     * qui ne bouge pas quand on coupe une seconde fois ce qui l'était déjà.
+     */
+    public function resumeAlertsIfExpired() {
+        $hours = (int) config::byKey('alerts_resume_hours', __CLASS__, 72);
+        if ($hours <= 0 || $this->alertsEnabled()) {
+            return;
+        }
+        $since = strtotime((string) $this->getCmd('info', 'alertes')->getValueDate());
+        if ($since === false || time() - $since < $hours * 3600) {
+            return;
+        }
+        log::add(__CLASS__, 'info', $this->getHumanName() . ' '
+               . sprintf(__('coupées depuis %d h : alertes réactivées automatiquement.', __FILE__), $hours));
+        $this->setAlerts(true);
+    }
+
     /* ========================================================== CYCLE DE VIE */
 
     /*
@@ -1062,6 +1120,9 @@ class dahuavtobe extends eqLogic {
         if (isset($_options['unite'])) {
             $cmd->setUnite($_options['unite']);
         }
+        if (isset($_options['value'])) {
+            $cmd->setValue($_options['value']);
+        }
         if (isset($_options['configuration'])) {
             foreach ($_options['configuration'] as $key => $value) {
                 $cmd->setConfiguration($key, $value);
@@ -1126,6 +1187,12 @@ class dahuavtobe extends eqLogic {
             array('generic_type' => 'ONLINE', 'order' => $order++));
         $this->addCmdIfMissing('sabotage', __('Alarme locale', __FILE__), 'info', 'binary',
             array('isVisible' => 0, 'order' => $order++));
+        /* Créée à 1 : un portier mis à jour ne doit pas devenir muet. */
+        $alerts = $this->addCmdIfMissing('alertes', __('Alertes', __FILE__), 'info', 'binary',
+            array('isHistorized' => 1, 'order' => $order++));
+        if ((string) $alerts->execCmd() === '') {
+            $this->checkAndUpdateCmd('alertes', 1);
+        }
         $this->addCmdIfMissing('dernier_evenement', __('Dernier événement', __FILE__), 'info', 'string',
             array('isVisible' => 0, 'order' => $order++));
         $this->addCmdIfMissing('dernier_evenement_date', __('Date du dernier événement', __FILE__), 'info', 'string',
@@ -1149,6 +1216,10 @@ class dahuavtobe extends eqLogic {
             array('isVisible' => 0, 'order' => $order++,
                   'configuration' => array('repeatEventManagement' => 'always')));
 
+        $this->addCmdIfMissing('alertes_on', __('Activer les alertes', __FILE__), 'action', 'other',
+            array('order' => $order++, 'value' => $alerts->getId()));
+        $this->addCmdIfMissing('alertes_off', __('Couper les alertes', __FILE__), 'action', 'other',
+            array('order' => $order++, 'value' => $alerts->getId()));
         $this->addCmdIfMissing('capture', __('Prendre une photo', __FILE__), 'action', 'other',
             array('order' => $order++));
         $this->addCmdIfMissing('analyser', __('Analyser la dernière photo', __FILE__), 'action', 'other',
@@ -1614,6 +1685,7 @@ class dahuavtobe extends eqLogic {
 
         foreach (self::byType(__CLASS__, true) as $eqLogic) {
             try {
+                $eqLogic->resumeAlertsIfExpired();
                 if ($eqLogic->getConfiguration('ip') == '') {
                     continue;
                 }
@@ -1744,6 +1816,14 @@ class dahuavtobeCmd extends cmd {
 
             case 'ouvrir':
                 $eqLogic->openDoor();
+                break;
+
+            case 'alertes_on':
+                $eqLogic->setAlerts(true);
+                break;
+
+            case 'alertes_off':
+                $eqLogic->setAlerts(false);
                 break;
 
             case 'reconnecter':

@@ -106,7 +106,14 @@
         "Visiteur - date": "Visitor - date",
         "Analyser la dernière photo": "Analyse the last photo",
         "analyse des visiteurs": "visitor analysis",
-        "L'analyse est cochée sur l'équipement, mais aucune clé API n'est renseignée dans la configuration du plugin.": "Analysis is ticked on the equipment, but no API key is set in the plugin configuration."
+        "L'analyse est cochée sur l'équipement, mais aucune clé API n'est renseignée dans la configuration du plugin.": "Analysis is ticked on the equipment, but no API key is set in the plugin configuration.",
+        "Alertes": "Alerts",
+        "Activer les alertes": "Enable alerts",
+        "Couper les alertes": "Mute alerts",
+        "alertes coupées : actions du visiteur ignorées.": "alerts muted: visitor actions skipped.",
+        "alertes réactivées.": "alerts enabled.",
+        "alertes coupées.": "alerts muted.",
+        "coupées depuis %d h : alertes réactivées automatiquement.": "muted for %d h: alerts enabled again automatically."
     },
     "plugins/dahuavtobe/core/ajax/dahuavtobe.ajax.php": {
         "401 - Accès non autorisé": "401 - Access denied",
@@ -166,7 +173,10 @@
         "Au-delà, la visite est classée « indéterminé » avec la raison, et les actions de cette catégorie sont jouées : on est prévenu même quand le service est en panne. De 5 à 60 secondes.": "Beyond it, the visit is classified \"undetermined\" with the reason, and that category's actions run: you are told even when the service is down. From 5 to 60 seconds.",
         "Indication pour le modèle": "Hint for the model",
         "Une camionnette blanche est souvent garée en face. Nous recevons beaucoup de colis Vinted.": "A white van is often parked across the road. We receive many Vinted parcels.",
-        "Facultatif. Ce que le modèle ne peut pas deviner de votre rue.": "Optional. What the model cannot guess about your street."
+        "Facultatif. Ce que le modèle ne peut pas deviner de votre rue.": "Optional. What the model cannot guess about your street.",
+        "Alertes": "Alerts",
+        "Réactivation automatique (h)": "Automatic re-enable (h)",
+        "Les alertes coupées par « Couper les alertes » reviennent d'elles-mêmes après ce délai. 0 : jamais. Une coupure oubliée ferait manquer chaque visiteur sans que rien ne le signale.": "Alerts muted with « Couper les alertes » come back on their own after this delay. 0: never. Forgotten muting would make you miss every visitor without any warning."
     },
     "plugins/dahuavtobe/desktop/php/dahuavtobe.php": {
         "401 - Accès non autorisé": "401 - Access denied",
