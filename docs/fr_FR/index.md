@@ -69,9 +69,10 @@ dashboard. Une case à cocher dans l'onglet Commandes suffit à en afficher une.
 
 ## Couper les alertes
 
-**Couper les alertes** fait taire la sonnette dans Jeedom, pour une sieste ou
-une soirée où l'on ne veut pas être dérangé ; **Activer les alertes** la
-rétablit. L'information **Alertes** vaut 1 quand elles sont actives.
+**Désactiver les alertes** fait taire la sonnette dans Jeedom, pour une sieste
+ou une soirée où l'on ne veut pas être dérangé ; **Activer les alertes** la
+rétablit. Les deux actions forment un seul interrupteur sur le dashboard ;
+l'information **Alertes**, masquée, vaut 1 quand elles sont actives.
 
 Coupées, le plugin n'analyse plus les visiteurs et n'exécute plus leurs
 actions. Il continue en revanche de tenir **Sonnerie**, les appels manqués et

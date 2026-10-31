@@ -2,8 +2,8 @@
 
 ## 0.2.5
 
-- Commande **Alertes** et ses deux actions **Activer les alertes** / **Couper
-  les alertes** : coupées, le plugin n'analyse plus les visiteurs et n'exécute
+- Commande **Alertes** et ses deux actions **Activer les alertes** /
+  **Désactiver les alertes**, un seul interrupteur sur le dashboard : coupées, le plugin n'analyse plus les visiteurs et n'exécute
   plus leurs actions, mais continue de tenir Sonnerie, les appels manqués et la
   photo à jour. Les scénarios testent `Alertes == 1` pour se taire aussi.
 - Une coupure oubliée prend fin seule après 72 h (réglable dans la

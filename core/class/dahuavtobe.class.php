@@ -1003,14 +1003,15 @@ class dahuavtobe extends eqLogic {
         return !is_object($cmd) || (string) $cmd->execCmd() !== '0';
     }
 
-    public function setAlerts($_enabled) {
+    public function setAlerts($_enabled, $_reason = '') {
         $value = $_enabled ? 1 : 0;
         if ($this->alertsEnabled() === (bool) $value) {
             return;
         }
         $this->checkAndUpdateCmd('alertes', $value);
         log::add(__CLASS__, 'info', $this->getHumanName() . ' '
-               . ($value ? __('alertes réactivées.', __FILE__) : __('alertes coupées.', __FILE__)));
+               . ($_reason !== '' ? $_reason
+                  : ($value ? __('alertes réactivées.', __FILE__) : __('alertes coupées.', __FILE__))));
         /* Le démon décide seul de l'analyse : il doit l'apprendre tout de suite. */
         self::reloadDaemonConfig();
     }
@@ -1030,9 +1031,7 @@ class dahuavtobe extends eqLogic {
         if ($since === false || time() - $since < $hours * 3600) {
             return;
         }
-        log::add(__CLASS__, 'info', $this->getHumanName() . ' '
-               . sprintf(__('coupées depuis %d h : alertes réactivées automatiquement.', __FILE__), $hours));
-        $this->setAlerts(true);
+        $this->setAlerts(true, sprintf(__('coupées depuis %d h : alertes réactivées automatiquement.', __FILE__), $hours));
     }
 
     /* ========================================================== CYCLE DE VIE */
@@ -1187,12 +1186,6 @@ class dahuavtobe extends eqLogic {
             array('generic_type' => 'ONLINE', 'order' => $order++));
         $this->addCmdIfMissing('sabotage', __('Alarme locale', __FILE__), 'info', 'binary',
             array('isVisible' => 0, 'order' => $order++));
-        /* Créée à 1 : un portier mis à jour ne doit pas devenir muet. */
-        $alerts = $this->addCmdIfMissing('alertes', __('Alertes', __FILE__), 'info', 'binary',
-            array('isHistorized' => 1, 'order' => $order++));
-        if ((string) $alerts->execCmd() === '') {
-            $this->checkAndUpdateCmd('alertes', 1);
-        }
         $this->addCmdIfMissing('dernier_evenement', __('Dernier événement', __FILE__), 'info', 'string',
             array('isVisible' => 0, 'order' => $order++));
         $this->addCmdIfMissing('dernier_evenement_date', __('Date du dernier événement', __FILE__), 'info', 'string',
@@ -1216,10 +1209,6 @@ class dahuavtobe extends eqLogic {
             array('isVisible' => 0, 'order' => $order++,
                   'configuration' => array('repeatEventManagement' => 'always')));
 
-        $this->addCmdIfMissing('alertes_on', __('Activer les alertes', __FILE__), 'action', 'other',
-            array('order' => $order++, 'value' => $alerts->getId()));
-        $this->addCmdIfMissing('alertes_off', __('Couper les alertes', __FILE__), 'action', 'other',
-            array('order' => $order++, 'value' => $alerts->getId()));
         $this->addCmdIfMissing('capture', __('Prendre une photo', __FILE__), 'action', 'other',
             array('order' => $order++));
         $this->addCmdIfMissing('analyser', __('Analyser la dernière photo', __FILE__), 'action', 'other',
@@ -1236,6 +1225,23 @@ class dahuavtobe extends eqLogic {
         $this->addCmdIfMissing('ouvrir', __('Ouvrir la porte', __FILE__), 'action', 'other',
             array('generic_type' => 'LOCK_OPEN', 'isVisible' => 0, 'order' => $order++,
                   'configuration' => array('actionConfirm' => 1)));
+
+        /* En dernier : ajoutées à un portier existant, elles ne doivent pas
+         * prendre le rang d'une commande déjà là. Sur le dashboard, un seul
+         * interrupteur : l'information est masquée, et le gabarit binarySwitch
+         * n'affiche que l'action utile — à condition que leur nom contienne un
+         * mot que le coeur sait lire (« activer », « désactiver », « on », « off »,
+         * cf. jeedom.cmd.normalizeName). Créée à 1 : un portier mis à jour ne
+         * doit pas devenir muet. */
+        $alerts = $this->addCmdIfMissing('alertes', __('Alertes', __FILE__), 'info', 'binary',
+            array('isVisible' => 0, 'isHistorized' => 1, 'order' => $order++));
+        if ((string) $alerts->execCmd() === '') {
+            $this->checkAndUpdateCmd('alertes', 1);
+        }
+        $this->addCmdIfMissing('alertes_on', __('Activer les alertes', __FILE__), 'action', 'other',
+            array('order' => $order++, 'value' => $alerts->getId(), 'template' => 'core::binarySwitch'));
+        $this->addCmdIfMissing('alertes_off', __('Désactiver les alertes', __FILE__), 'action', 'other',
+            array('order' => $order++, 'value' => $alerts->getId(), 'template' => 'core::binarySwitch'));
     }
 
     /* ========================================================== ÉVÉNEMENTS */

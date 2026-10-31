@@ -240,6 +240,24 @@ leave.
 - The `dahuavtobe` log records every answer, with the category proposed by the
   model, its confidence and the response time.
 
+## Muting alerts
+
+**Alerts off** silences the door station in Jeedom, for a nap or an evening
+without interruptions; **Alerts on** brings it back. Both actions make a single
+switch on the dashboard; the hidden **Alerts** info is 1 while alerts are on.
+
+While alerts are off, the plugin no longer analyses visitors nor runs their
+actions. It still keeps **Ring**, missed calls and the photo up to date, so
+the history still tells who came by. Your scenarios know nothing about the
+switch until you tell them: add `#[…][Door station][Alerts]# == 1` to their
+condition.
+
+Alerts switched off come back on their own after 72 h, a delay set in the
+plugin configuration (0 = never): otherwise, forgotten muting would make you
+miss every visitor without any warning. The delay starts when alerts are
+switched off; switching them off again does not restart it. The door station's
+chime and the indoor monitor keep ringing: they do not depend on Jeedom.
+
 ## Opening the door from Jeedom
 
 The **Open door** command exists but is deliberately restrained: it is created
