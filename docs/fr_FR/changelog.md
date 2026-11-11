@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.6
+
+- Plus de bascule DHIP ↔ CGI quand le portier est injoignable (pas de route,
+  refus, délai) : la bascule ne sert que lorsqu'un transport est refusé alors
+  que l'autre répond. Lors d'une coupure réseau, le démon alternait les deux
+  transports à chaque essai et triplait les lignes du journal.
+- Une coupure du portier ne laisse plus qu'une erreur au journal, et seulement
+  si elle dure plus de 3 minutes ; les essais suivants restent en
+  avertissement. Une coupure commencée par une déconnexion n'était, elle,
+  jamais signalée en erreur, même après des heures.
+
 ## 0.2.5
 
 - Commande **Alertes** et ses deux actions **Activer les alertes** /

@@ -314,5 +314,7 @@ proc_terminate($serveur);
 @unlink($image);
 @unlink(sys_get_temp_dir() . '/dahuavtobe-fake-derniere.json');
 
+require __DIR__ . '/reconnexion.php';
+
 echo "\n  ==> $ok réussis, $ko échec(s)\n\n";
 exit($ko === 0 ? 0 : 1);

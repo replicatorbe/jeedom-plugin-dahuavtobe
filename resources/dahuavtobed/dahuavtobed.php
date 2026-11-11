@@ -116,6 +116,17 @@ abstract class VtoTransport {
      */
     const ATTACH_REPLAY_WINDOW = 3;
 
+    /*
+     * Une panne plus courte que ce délai ne se journalise pas en erreur : un
+     * redémarrage du portier ou un hoquet réseau revient en moins d'une minute,
+     * et chaque fois une erreur restait au journal pour un événement normal.
+     */
+    const OUTAGE_GRACE = 180;
+
+    /* Délai de la sonde TCP qui décide d'une bascule : un hôte vivant répond en
+     * quelques millisecondes, inutile de bloquer la boucle plus longtemps. */
+    const SWITCH_PROBE_TIMEOUT = 2;
+
     public $config;
     public $socket = null;
     public $state = 'disconnected';
@@ -126,6 +137,8 @@ abstract class VtoTransport {
     private $nextRetry = 0;
     private $failures = 0;
     private $connectFailures = 0;
+    private $outageSince = 0;        // début de la panne en cours, 0 si aucune
+    private $outageReported = false; // panne déjà signalée en erreur
 
     public function __construct($_config) {
         $this->config = $_config;
@@ -190,6 +203,8 @@ abstract class VtoTransport {
             $this->failures = 0;
             $this->connectFailures = 0;
             $this->nextRetry = time();
+            $this->outageSince = 0;
+            $this->outageReported = false;
             return 0;
         }
         $this->failures++;
@@ -217,6 +232,78 @@ abstract class VtoTransport {
     public function adoptBackoff($_previous) {
         $this->failures = $_previous->failureCount();
         $this->nextRetry = time();
+        // La panne continue : changer de transport ne la fait pas recommencer.
+        list($this->outageSince, $this->outageReported) = $_previous->outageState();
+    }
+
+    public function outageState() {
+        return array($this->outageSince, $this->outageReported);
+    }
+
+    /* Retient le début de la panne : déconnexion, ou premier essai raté. */
+    public function noteOutage() {
+        if ($this->outageSince == 0) {
+            $this->outageSince = time();
+        }
+    }
+
+    public function outageDuration() {
+        return ($this->outageSince > 0) ? time() - $this->outageSince : 0;
+    }
+
+    /*
+     * Niveau de journal d'un essai de connexion raté. Une seule erreur par panne,
+     * et seulement si elle dure : les essais d'une panne courte restent des
+     * avertissements, et ceux qui suivent l'erreur, qui peuvent durer toute une
+     * nuit, ne font que la confirmer.
+     */
+    public function failureLogLevel() {
+        $this->noteOutage();
+        if ($this->outageReported || $this->outageDuration() < self::OUTAGE_GRACE) {
+            return 'warning';
+        }
+        $this->outageReported = true;
+        return 'error';
+    }
+
+    protected function dhipPort() {
+        return isset($this->config['dhip_port']) && (int) $this->config['dhip_port'] > 0
+             ? (int) $this->config['dhip_port'] : 5000;
+    }
+
+    protected function httpPort() {
+        return isset($this->config['http_port']) && (int) $this->config['http_port'] > 0
+             ? (int) $this->config['http_port'] : 80;
+    }
+
+    /* Port qu'utiliserait l'autre transport. */
+    abstract public function alternatePort();
+
+    /*
+     * La bascule de transport existe pour les portiers qui refusent l'un des
+     * deux protocoles tout en servant l'autre (authentification, réponse HTTP
+     * inattendue, port fermé). Elle n'a aucun sens quand c'est l'hôte entier qui
+     * est injoignable : le 2026-11-05, une coupure réseau a fait alterner DHIP
+     * et CGI à chaque essai pendant des heures, avec une ligne de bascule de
+     * plus à chaque erreur.
+     *
+     * Un échec au-delà de la connexion TCP dit que le transport ne convient
+     * pas : on bascule. Un échec TCP (refus, pas de route, délai) est ambigu —
+     * port de ce transport fermé, ou hôte absent : on frappe au port de l'autre
+     * transport, et on ne bascule que s'il répond.
+     */
+    public function switchWorthwhile($_error) {
+        if (strpos($_error, 'connexion TCP impossible') !== 0) {
+            return true;
+        }
+        $errno = 0; $errstr = '';
+        $socket = @stream_socket_client('tcp://' . $this->config['ip'] . ':' . $this->alternatePort(),
+                                        $errno, $errstr, self::SWITCH_PROBE_TIMEOUT);
+        if ($socket === false) {
+            return false;
+        }
+        @fclose($socket);
+        return true;
     }
 
     /* Ajoute au buffer en le bornant : un flux corrompu ne doit pas remplir la RAM. */
@@ -309,9 +396,8 @@ class VtoDhipTransport extends VtoTransport {
         return 'DHIP';
     }
 
-    private function port() {
-        return isset($this->config['dhip_port']) && (int) $this->config['dhip_port'] > 0
-             ? (int) $this->config['dhip_port'] : 5000;
+    public function alternatePort() {
+        return $this->httpPort();
     }
 
     private function buildHeader($_length) {
@@ -426,7 +512,7 @@ class VtoDhipTransport extends VtoTransport {
 
         $errno = 0; $errstr = '';
         $this->socket = @stream_socket_client(
-            'tcp://' . $this->config['ip'] . ':' . $this->port(), $errno, $errstr, 8
+            'tcp://' . $this->config['ip'] . ':' . $this->dhipPort(), $errno, $errstr, 8
         );
         if ($this->socket === false) {
             $this->socket = null;
@@ -641,6 +727,10 @@ class VtoCgiTransport extends VtoTransport {
         return 'CGI';
     }
 
+    public function alternatePort() {
+        return $this->dhipPort();
+    }
+
     /*
      * Relu à chaque connexion et non une fois pour toutes à la construction :
      * la configuration d'un client est remplacée à chaud quand l'utilisateur
@@ -651,11 +741,6 @@ class VtoCgiTransport extends VtoTransport {
         if (isset($this->config['heartbeat']) && (int) $this->config['heartbeat'] > 0) {
             $this->heartbeat = max(3, min(60, (int) $this->config['heartbeat']));
         }
-    }
-
-    private function httpPort() {
-        return isset($this->config['http_port']) && (int) $this->config['http_port'] > 0
-             ? (int) $this->config['http_port'] : 80;
     }
 
     public function connect() {
@@ -1180,11 +1265,12 @@ class VtoDaemon {
             $first = ($client->failureCount() == 0);
             $connectFailures = $client->noteConnectFailure();
             $delay = $client->scheduleRetry(max(5, (int) $this->config['reconnect_delay']));
-            /* La première panne est une erreur ; les essais suivants, qui
-             * peuvent durer toute une nuit, ne font que la confirmer. */
+            /* Une seule erreur par panne, et seulement au-delà de trois minutes
+             * (voir failureLogLevel) ; le reste en avertissement. */
             $message = $client->name() . ' ' . $error . ' — nouvel essai dans ' . $delay . 's';
-            if ($first) {
-                VtoLog::error($message);
+            if ($client->failureLogLevel() == 'error') {
+                VtoLog::error($message . ' (injoignable depuis '
+                            . round($client->outageDuration() / 60) . ' min)');
             } else {
                 VtoLog::warning($message);
             }
@@ -1193,10 +1279,11 @@ class VtoDaemon {
              * Bascule automatique de transport, dans les deux sens : certains
              * micrologiciels refusent l'un tout en servant parfaitement l'autre,
              * et un repli à sens unique condamnerait le portier au transport de
-             * secours jusqu'au prochain redémarrage du démon.
+             * secours jusqu'au prochain redémarrage du démon. Jamais sur un hôte
+             * injoignable : voir switchWorthwhile().
              */
             $mode = isset($client->config['transport']) ? $client->config['transport'] : 'auto';
-            if ($mode == 'auto' && $connectFailures >= 2) {
+            if ($mode == 'auto' && $connectFailures >= 2 && $client->switchWorthwhile($error)) {
                 $other = ($client->label() == 'DHIP') ? 'CGI' : 'DHIP';
                 VtoLog::warning($client->name() . ' ' . $client->label()
                               . ' en échec, bascule sur le transport ' . $other);
@@ -1238,6 +1325,7 @@ class VtoDaemon {
     private function dropClient($_client, $_reason) {
         VtoLog::warning($_client->name() . ' ' . $_reason);
         $_client->disconnect();
+        $_client->noteOutage();
         $_client->scheduleRetry(max(5, (int) $this->config['reconnect_delay']));
         $this->push(array(array(
             'station_id' => $_client->id(),
