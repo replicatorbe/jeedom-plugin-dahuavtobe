@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.7
+
+- Door station snapshots (`data/snapshots`) are no longer included in Jeedom
+  backups.
+
 ## 0.2.5
 
 - **Alerts** command with its **Alerts on** / **Alerts off** actions, a single

@@ -188,6 +188,12 @@ class dahuavtobe extends eqLogic {
 
     /* ========================================================== DÉMON */
 
+    /* Les captures du portier se renouvellent d'elles-mêmes : inutile de les
+     * embarquer dans chaque sauvegarde de Jeedom. */
+    public static function backupExclude() {
+        return array('data/snapshots');
+    }
+
     /*
      * L'état du processus se détermine indépendamment de « launchable » : si
      * l'absence de portier configuré rendait aussi l'état « nok », le coeur

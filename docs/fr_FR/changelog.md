@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.7
+
+- Les captures du portier (`data/snapshots`) ne sont plus incluses dans les
+  sauvegardes de Jeedom.
+
 ## 0.2.6
 
 - Plus de bascule DHIP ↔ CGI quand le portier est injoignable (pas de route,
